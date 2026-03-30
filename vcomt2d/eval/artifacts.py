@@ -17,26 +17,26 @@ def prepare_run_dir(base_output_dir: str, task_key: str, run_id: str) -> Path:
     return run_dir
 
 
-def write_plan(run_dir: Path, plan: Optional[FSMPlan]) -> Optional[str]:
+def write_json(run_dir: Path, filename: str, payload) -> str:
+    path = run_dir / filename
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def write_plan(run_dir: Path, filename: str, plan: Optional[FSMPlan]) -> Optional[str]:
     if plan is None:
         return None
-    path = run_dir / "plan.json"
-    path.write_text(json.dumps(plan.to_dict(), indent=2) + "\n", encoding="utf-8")
-    return str(path)
+    return write_json(run_dir, filename, plan.to_dict())
 
 
 def write_trace(run_dir: Path, trace: Optional[ExecutionTrace]) -> Optional[str]:
     if trace is None:
         return None
-    path = run_dir / "trace.json"
-    path.write_text(json.dumps(trace.to_dict(), indent=2) + "\n", encoding="utf-8")
-    return str(path)
+    return write_json(run_dir, "trace.json", trace.to_dict())
 
 
 def write_summary(run_dir: Path, summary: EvalRunSummary) -> str:
-    path = run_dir / "summary.json"
-    path.write_text(json.dumps(summary.to_dict(), indent=2) + "\n", encoding="utf-8")
-    return str(path)
+    return write_json(run_dir, "summary.json", summary.to_dict())
 
 
 def write_logs(run_dir: Path, lines: Iterable[str]) -> str:
@@ -44,4 +44,3 @@ def write_logs(run_dir: Path, lines: Iterable[str]) -> str:
     payload = "\n".join(lines).rstrip() + "\n"
     path.write_text(payload, encoding="utf-8")
     return str(path)
-

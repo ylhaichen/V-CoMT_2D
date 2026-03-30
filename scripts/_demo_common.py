@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -10,19 +11,37 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from vcomt2d.fsm.executor import FSMExecutor
-from vcomt2d.planner.main import DeterministicPlanner
+from vcomt2d.eval.models import EvalRequest
+from vcomt2d.eval.runner import EvaluationHarness
+from vcomt2d.planner.main import planner_from_mode
 from vcomt2d.planner.models import PlanningRequest
+from vcomt2d.planner.config import PlanningConfig
 from vcomt2d.sim.tasks.catalog import TASK_SCENARIOS
-from vcomt2d.viz.export import save_animation_with_fallback
 
 
-def run_planning_demo(task_name: str) -> None:
+def build_demo_parser(description: str, default_output_dir: str = "outputs/demos") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--backend", default="deterministic", choices=["deterministic", "gpt", "llm_stub", "vlm_stub"], help="Planner backend to use.")
+    parser.add_argument("--model", default=None, help="Optional backend model override.")
+    parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override.")
+    parser.add_argument("--output-dir", default=default_output_dir, help="Directory used for saved demo artifacts.")
+    return parser
+
+
+def run_planning_demo(task_name: str, backend: str = "deterministic", model: str | None = None, reasoning_effort: str | None = None) -> None:
     scenario = TASK_SCENARIOS[task_name]
-    planner = DeterministicPlanner()
-    request = PlanningRequest(request_id=f"{task_name}_demo", user_instruction=scenario.instruction, world_state=scenario.fixture_builder())
+    planner = planner_from_mode(backend)
+    request = PlanningRequest(
+        request_id=f"{task_name}_demo",
+        user_instruction=scenario.instruction,
+        world_state=scenario.fixture_builder(),
+        planner_mode=backend,
+        planning_config=PlanningConfig(openai_model=model, openai_reasoning_effort=reasoning_effort),
+    )
     result = planner.plan(request)
     print(f"== {task_name.upper()} Planning Demo ==")
+    print(f"backend: {backend}")
+    print(f"model: {result.debug_info.get('model_name')}")
     print("reasoning_summary:")
     print(result.reasoning_summary)
     print("validation:")
@@ -33,18 +52,29 @@ def run_planning_demo(task_name: str) -> None:
     print(json.dumps(result.plan.to_dict() if result.plan else result.to_dict(), indent=2))
 
 
-def run_animation_demo(task_name: str) -> None:
-    scenario = TASK_SCENARIOS[task_name]
-    planner = DeterministicPlanner()
-    request = PlanningRequest(request_id=f"{task_name}_demo", user_instruction=scenario.instruction, world_state=scenario.fixture_builder())
-    result = planner.plan(request)
-    if not result.success or result.plan is None:
-        raise SystemExit(f"Planning failed: {result.failure_reason}")
-    execution = FSMExecutor().execute(request.request_id, result.task_type, result.plan, scenario.fixture_builder())
-    output_stem = Path("outputs/animations") / f"{task_name}_demo"
-    artifact = save_animation_with_fallback(execution.trace, str(output_stem), fps=request.planning_config.animation_fps)
+def run_animation_demo(
+    task_name: str,
+    backend: str = "deterministic",
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    output_dir: str = "outputs/demos",
+) -> None:
+    harness = EvaluationHarness()
+    batch = harness.run_batch(
+        EvalRequest(
+            tasks=[task_name],
+            runs_per_task=1,
+            enable_animation=True,
+            output_dir=output_dir,
+            planner_mode=backend,
+            model_name=model,
+            reasoning_effort=reasoning_effort,
+        )
+    )
+    summary = batch.runs[0]
     print(f"== {task_name.upper()} Animation Demo ==")
-    print(f"execution_status: {execution.status}")
-    print(f"saved_path: {artifact.saved_path}")
-    print(f"format: {artifact.format}")
-    print(f"message: {artifact.message}")
+    print(f"backend: {backend}")
+    print(f"model: {summary.get('model_name')}")
+    print(f"execution_success: {summary['execution_success']}")
+    print(f"saved_path: {summary['artifacts']['animation']}")
+    print(f"summary_path: {summary['artifacts']['summary_json']}")

@@ -7,6 +7,7 @@ from vcomt2d.core.status import PlannerMode
 from .backends import DeterministicTemplateBackend, PlannerBackend, StubLLMPlannerBackend
 from .base import Planner
 from .models import PlanningRequest, PlanningResult
+from .openai_backend import OpenAIGPTPlannerBackend
 from .pipeline import PlannerPipeline
 
 
@@ -26,6 +27,8 @@ def planner_from_mode(planner_mode: str) -> Planner:
 
     if planner_mode == PlannerMode.DETERMINISTIC.value:
         return DeterministicPlanner()
+    if planner_mode == PlannerMode.GPT.value:
+        return DeterministicPlanner(backend=OpenAIGPTPlannerBackend())
     if planner_mode in {"llm_stub", "vlm_stub"}:
         return DeterministicPlanner(backend=StubLLMPlannerBackend(fallback_backend=DeterministicTemplateBackend()))
     return DeterministicPlanner()

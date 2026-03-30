@@ -86,6 +86,8 @@ class PlannerPipeline:
                 debug_info={"intent": intent.to_dict(), "scene_facts": scene_facts.to_dict(), "roles": roles.to_dict(), "backend": self.generation_backend.backend_name},
             )
 
+        generation_candidate_bundle = candidate_bundle
+        repair_backend_debug: list[Dict[str, object]] = []
         candidate = candidate_bundle.plan
         validation = validate_candidate(candidate)
         repairer = PlanRepairer(request.planning_config)
@@ -128,6 +130,13 @@ class PlannerPipeline:
                     reasoning_summary=self._build_reasoning_summary(intent.to_dict(), repair.scene_facts.to_dict(), repair.roles.to_dict()),
                 )
                 candidate_bundle = self.repair_backend.build_candidate(context)
+                repair_backend_debug.append(
+                    {
+                        "backend": candidate_bundle.backend_name,
+                        "model_name": candidate_bundle.model_name,
+                        "debug_info": candidate_bundle.debug_info,
+                    }
+                )
                 candidate = candidate_bundle.plan
                 applied_repairs.extend(repair.applied_repairs)
                 validation = validate_candidate(candidate)
@@ -181,8 +190,13 @@ class PlannerPipeline:
                 "intent": context.intent.to_dict(),
                 "scene_facts": context.scene_facts.to_dict(),
                 "roles": context.roles.to_dict(),
-                "backend": candidate_bundle.backend_name,
-                "backend_debug": candidate_bundle.debug_info,
+                "backend": generation_candidate_bundle.backend_name,
+                "model_name": generation_candidate_bundle.model_name,
+                "backend_debug": {
+                    "generation": generation_candidate_bundle.debug_info,
+                    "repair_candidates": repair_backend_debug,
+                    "final_candidate_backend": candidate_bundle.backend_name,
+                },
                 "applied_repairs": applied_repairs,
             },
         )
@@ -213,6 +227,7 @@ class PlannerPipeline:
                 "scene_facts": context.scene_facts.to_dict(),
                 "roles": context.roles.to_dict(),
                 "backend": self.generation_backend.backend_name,
+                "model_name": backend_debug.get("model_name") if isinstance(backend_debug, dict) else None,
                 "backend_debug": backend_debug,
                 "applied_repairs": applied_repairs,
             },

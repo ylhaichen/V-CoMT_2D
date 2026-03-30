@@ -15,7 +15,7 @@ def test_llm_stub_mode_uses_deterministic_fallback():
     )
     assert result.success is True
     assert result.debug_info["backend"] == "llm_stub"
-    assert result.debug_info["backend_debug"]["fallback_backend"] == "deterministic_template"
+    assert result.debug_info["backend_debug"]["generation"]["fallback_backend"] == "deterministic_template"
 
 
 def test_unconfigured_backend_returns_structured_failure():

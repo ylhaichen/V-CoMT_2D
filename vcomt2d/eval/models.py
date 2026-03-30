@@ -16,6 +16,8 @@ class EvalRequest:
     output_dir: str = "outputs/eval"
     save_logs: bool = True
     planner_mode: str = "deterministic"
+    model_name: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return to_serializable(self)
@@ -24,6 +26,13 @@ class EvalRequest:
 @dataclass
 class EvalArtifactPaths:
     run_dir: str
+    request_json: Optional[str] = None
+    prompt_json: Optional[str] = None
+    raw_response_json: Optional[str] = None
+    candidate_plan_json: Optional[str] = None
+    final_plan_json: Optional[str] = None
+    validation_json: Optional[str] = None
+    semantic_sanity_json: Optional[str] = None
     plan_json: Optional[str] = None
     trace_json: Optional[str] = None
     summary_json: Optional[str] = None
@@ -40,6 +49,8 @@ class EvalRunSummary:
     task_key: str
     task_family: Optional[str]
     instruction: str
+    backend_name: str
+    model_name: Optional[str]
     planner_success: bool
     validation_passed: bool
     semantic_passed: bool

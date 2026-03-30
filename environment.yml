@@ -5,6 +5,7 @@ dependencies:
   - python=3.10
   - matplotlib>=3.5
   - numpy>=1.21
+  - openai>=1.0
   - pillow>=9.0
   - pytest>=6.2
   - ffmpeg

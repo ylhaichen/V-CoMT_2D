@@ -8,6 +8,10 @@
   - request, response, and reasoning models
 - `backends.py`
   - candidate plan generation backends
+- `openai_backend.py`
+  - real OpenAI GPT backend using the `Responses API`
+- `openai_config.py`
+  - environment/config loading for live GPT planning
 - `pipeline.py`
   - orchestration for generation, validation, semantic checks, and repair
 - `intent_parser.py`
@@ -46,10 +50,24 @@ Current backends:
 
 - `DeterministicTemplateBackend`
   - trusted symbolic baseline used for normal planning
+- `OpenAIGPTPlannerBackend`
+  - real GPT-based candidate generator using OpenAI `Responses API`
+  - requests `Structured Outputs` with a schema-constrained `FSM` response
 - `StubLLMPlannerBackend`
   - future insertion point for `LLM/VLM` candidate generation
 
-The backend boundary exists so future model-generated candidates can enter the same sanitize / validate / execute stack without changing downstream components.
+The backend boundary exists so model-generated candidates can enter the same sanitize / validate / execute stack without changing downstream components.
+
+## GPT Backend Notes
+
+The GPT backend:
+
+- uses model `gpt-5.4` by default
+- loads credentials from `OPENAI_API_KEY`
+- supports model override through config or CLI
+- records prompt payloads, raw responses, parsed candidate plans, and repair outputs for replay
+
+The planner still does not trust raw model output. The validator, semantic sanity checks, and repair logic remain the source of truth.
 
 ## Semantic Sanity Layer
 

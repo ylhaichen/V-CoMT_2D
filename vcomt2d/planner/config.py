@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 
 @dataclass
@@ -27,3 +27,9 @@ class PlanningConfig:
     animation_output_dir: str = "outputs/animations"
     animation_fps: int = 4
     mp4_writer_backend: str = "ffmpeg"
+    save_backend_artifacts: bool = True
+    openai_model: Optional[str] = None
+    openai_reasoning_effort: Optional[str] = None
+    openai_timeout_seconds: Optional[float] = None
+    openai_retry_count: Optional[int] = None
+    openai_max_output_tokens: Optional[int] = None

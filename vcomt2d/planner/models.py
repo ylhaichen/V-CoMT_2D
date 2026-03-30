@@ -88,6 +88,7 @@ class PlanningContext:
 class BackendPlanCandidate:
     backend_name: str
     plan: FSMPlan
+    model_name: Optional[str] = None
     debug_info: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:

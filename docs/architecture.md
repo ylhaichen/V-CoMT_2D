@@ -9,7 +9,7 @@ Primary data flow:
 Main packages:
 
 - `vcomt2d/planner/`
-  - planner backends, symbolic heuristics, scene interpretation, role assignment, `FSM` synthesis, validation, semantic repair
+  - planner backends, including deterministic and real OpenAI GPT candidate generation, symbolic heuristics, scene interpretation, role assignment, `FSM` synthesis, validation, semantic repair
 - `vcomt2d/fsm/`
   - schema, validation, and execution
 - `vcomt2d/sim/`

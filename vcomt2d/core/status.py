@@ -7,6 +7,7 @@ from enum import Enum
 
 class PlannerMode(str, Enum):
     DETERMINISTIC = "deterministic"
+    GPT = "gpt"
     SCRIPTED = "scripted"
     REPAIR = "repair"
     LLM_STUB = "llm_stub"
