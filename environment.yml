@@ -1,0 +1,10 @@
+name: vcomt2d
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - matplotlib>=3.5
+  - numpy>=1.21
+  - pytest>=6.2
+  - ffmpeg
+
