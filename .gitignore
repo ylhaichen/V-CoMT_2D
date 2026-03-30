@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+.codex
+outputs/animations/*.gif
+outputs/animations/*.mp4

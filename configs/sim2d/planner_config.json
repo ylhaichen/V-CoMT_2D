@@ -1,0 +1,11 @@
+{
+  "max_retries": 2,
+  "strict_validation": true,
+  "allow_repair": true,
+  "deterministic_seed": 0,
+  "animation_enabled": true,
+  "animation_output_dir": "outputs/animations",
+  "animation_fps": 4,
+  "mp4_writer_backend": "ffmpeg"
+}
+
