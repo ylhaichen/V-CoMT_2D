@@ -18,6 +18,7 @@ class EvalRequest:
     planner_mode: str = "deterministic"
     model_name: Optional[str] = None
     reasoning_effort: Optional[str] = None
+    use_scene_image: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return to_serializable(self)

@@ -1,70 +1,40 @@
 import json
+from pathlib import Path
 
 from vcomt2d.eval.models import EvalRequest
 from vcomt2d.eval.runner import EvaluationHarness
 from vcomt2d.planner.intent_parser import parse_intent
 from vcomt2d.planner.main import DeterministicPlanner, planner_from_mode
 from vcomt2d.planner.models import PlanningContext, PlanningRequest, TaskType
-from vcomt2d.planner.openai_backend import OpenAIGPTPlannerBackend
-from vcomt2d.planner.openai_config import OpenAIPlannerConfig
+from vcomt2d.planner.qwen_vl_backend import QwenVLPlannerBackend
+from vcomt2d.planner.qwen_vl_config import QwenVLPlannerConfig
 from vcomt2d.planner.role_assignment import assign_roles
 from vcomt2d.planner.scene_interpreter import interpret_scene
 from vcomt2d.sim.tasks.fixtures import door_task_world
 
 
-class FakeResponse:
-    def __init__(self, payload):
-        self.output_text = json.dumps(payload)
-        self._payload = {
-            "id": "resp_test",
-            "output": [{"content": [{"type": "output_text", "text": self.output_text}]}],
-        }
+class FakeQwenEngine:
+    engine_name = "fake_qwen_engine"
 
-    def model_dump(self, mode="json"):
-        return self._payload
-
-
-class FakeResponsesAPI:
     def __init__(self, payload):
         self.payload = payload
         self.calls = []
 
-    def create(self, **kwargs):
+    def generate(self, **kwargs):
         self.calls.append(kwargs)
-        return FakeResponse(self.payload)
-
-
-class FakeOpenAIClient:
-    def __init__(self, payload):
-        self.responses = FakeResponsesAPI(payload)
-
-
-class FakeRateLimitError(Exception):
-    def __init__(self, message="quota exceeded", body=None, status_code=429):
-        super().__init__(message)
-        self.body = body or {
-            "error": {
-                "message": "You exceeded your current quota, please check your plan and billing details.",
-                "type": "insufficient_quota",
-                "code": "insufficient_quota",
-            }
+        return {
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "fake"}]}],
+            "chat_text": "fake chat text",
+            "output_text": json.dumps(self.payload),
+            "raw_response": {"generated_text": json.dumps(self.payload)},
         }
-        self.status_code = status_code
 
 
-class FailingResponsesAPI:
-    def __init__(self, exc):
-        self.exc = exc
-        self.calls = []
+class FailingQwenEngine:
+    engine_name = "fake_qwen_engine"
 
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        raise self.exc
-
-
-class FailingOpenAIClient:
-    def __init__(self, exc):
-        self.responses = FailingResponsesAPI(exc)
+    def generate(self, **kwargs):
+        raise RuntimeError("CUDA out of memory while generating")
 
 
 def _valid_door_payload():
@@ -131,7 +101,7 @@ def _valid_door_payload():
 
 def _door_context():
     world = door_task_world()
-    request = PlanningRequest(request_id="door_gpt", user_instruction="Both of you get into the next room", world_state=world, planner_mode="gpt")
+    request = PlanningRequest(request_id="door_qwen", user_instruction="Both of you get into the next room", world_state=world, planner_mode="qwen_vl")
     intent = parse_intent(request.user_instruction)
     scene_facts = interpret_scene(TaskType.T1_DOOR_WEDGE_PASS_THROUGH, world)
     roles = assign_roles(scene_facts, world)
@@ -140,107 +110,117 @@ def _door_context():
         intent=intent,
         scene_facts=scene_facts,
         roles=roles,
-        reasoning_summary="Door task context for GPT backend testing.",
+        reasoning_summary="Door task context for Qwen backend testing.",
     )
 
 
-def test_openai_config_loads_from_env(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4")
-    monkeypatch.setenv("OPENAI_REASONING_EFFORT", "high")
-    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "33")
-    monkeypatch.setenv("OPENAI_RETRY_COUNT", "4")
-    monkeypatch.setenv("OPENAI_MAX_OUTPUT_TOKENS", "2048")
+def test_qwen_config_loads_from_env(monkeypatch):
+    monkeypatch.setenv("QWEN_VL_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
+    monkeypatch.setenv("QWEN_VL_MAX_NEW_TOKENS", "1024")
+    monkeypatch.setenv("QWEN_VL_TEMPERATURE", "0.1")
+    monkeypatch.setenv("QWEN_VL_LOAD_IN_4BIT", "true")
+    monkeypatch.setenv("QWEN_VL_USE_SCENE_IMAGE", "true")
 
-    config = OpenAIPlannerConfig.from_env()
-    assert config.api_key == "test-key"
-    assert config.model == "gpt-5.4"
-    assert config.reasoning_effort == "high"
-    assert config.timeout_seconds == 33.0
-    assert config.retry_count == 4
-    assert config.max_output_tokens == 2048
+    config = QwenVLPlannerConfig.from_env()
+    assert config.model == "Qwen/Qwen2.5-VL-3B-Instruct"
+    assert config.max_new_tokens == 1024
+    assert config.temperature == 0.1
+    assert config.load_in_4bit is True
+    assert config.use_scene_image is True
 
 
-def test_openai_backend_builds_structured_request_and_parses_plan():
-    client = FakeOpenAIClient(_valid_door_payload())
-    backend = OpenAIGPTPlannerBackend(
-        config=OpenAIPlannerConfig(api_key="test-key", model="gpt-5.4", reasoning_effort="medium", timeout_seconds=30.0, retry_count=1, max_output_tokens=2048),
-        client=client,
+def test_qwen_backend_builds_candidate_and_optional_scene_image():
+    engine = FakeQwenEngine(_valid_door_payload())
+    backend = QwenVLPlannerBackend(
+        config=QwenVLPlannerConfig(model="Qwen/Qwen2.5-VL-3B-Instruct", use_scene_image=True),
+        engine=engine,
     )
 
     candidate = backend.build_candidate(_door_context())
 
-    assert candidate.backend_name == "gpt"
-    assert candidate.model_name == "gpt-5.4"
+    assert candidate.backend_name == "qwen_vl"
+    assert candidate.model_name == "Qwen/Qwen2.5-VL-3B-Instruct"
     assert candidate.plan.initial_state == "S0_APPROACH"
-    assert client.responses.calls
-    request_payload = client.responses.calls[0]
-    assert request_payload["model"] == "gpt-5.4"
-    assert request_payload["reasoning"]["effort"] == "medium"
-    assert request_payload["text"]["format"]["type"] == "json_schema"
-    assert request_payload["text"]["format"]["strict"] is True
+    assert engine.calls
+    scene_image_path = engine.calls[0]["scene_image_path"]
+    assert scene_image_path is not None
+    assert Path(scene_image_path).exists()
+    assert candidate.debug_info["scene_image_path"] == scene_image_path
 
 
-def test_planner_from_mode_returns_gpt_backend():
-    planner = planner_from_mode("gpt")
+def test_qwen_engine_resolves_local_snapshot_path(tmp_path, monkeypatch):
+    cache_root = tmp_path / ".cache" / "huggingface" / "hub"
+    repo_dir = cache_root / "models--Qwen--Qwen2.5-VL-3B-Instruct"
+    snapshot_dir = repo_dir / "snapshots" / "revision123"
+    snapshot_dir.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("revision123\n", encoding="utf-8")
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    engine = QwenVLPlannerBackend().engine
+
+    resolved = engine._resolve_model_source(
+        QwenVLPlannerConfig(
+            model="Qwen/Qwen2.5-VL-3B-Instruct",
+            local_files_only=True,
+        )
+    )
+
+    assert resolved == str(snapshot_dir)
+
+
+def test_planner_from_mode_returns_qwen_backend():
+    planner = planner_from_mode("qwen_vl")
     assert isinstance(planner, DeterministicPlanner)
-    assert planner.backend.backend_name == "gpt"
+    assert planner.backend.backend_name == "qwen_vl"
 
 
-def test_gpt_eval_run_saves_replayable_artifacts(tmp_path):
-    client = FakeOpenAIClient(_valid_door_payload())
+def test_qwen_eval_run_saves_replayable_artifacts(tmp_path):
     planner = DeterministicPlanner(
-        backend=OpenAIGPTPlannerBackend(
-            config=OpenAIPlannerConfig(api_key="test-key", model="gpt-5.4", reasoning_effort="medium", timeout_seconds=30.0, retry_count=1, max_output_tokens=2048),
-            client=client,
+        backend=QwenVLPlannerBackend(
+            config=QwenVLPlannerConfig(model="Qwen/Qwen2.5-VL-3B-Instruct"),
+            engine=FakeQwenEngine(_valid_door_payload()),
         )
     )
     harness = EvaluationHarness(planner=planner)
     output_dir = tmp_path / "eval_outputs"
 
-    harness.run_batch(EvalRequest(tasks=["door"], runs_per_task=1, output_dir=str(output_dir)))
+    harness.run_batch(EvalRequest(tasks=["door"], runs_per_task=1, output_dir=str(output_dir), planner_mode="qwen_vl"))
 
-    run_dir = output_dir / "gpt" / "door" / "run_000"
+    run_dir = output_dir / "qwen_vl" / "door" / "run_000"
     assert (run_dir / "request.json").exists()
     assert (run_dir / "prompt.json").exists()
     assert (run_dir / "raw_response.json").exists()
     assert (run_dir / "candidate_plan.json").exists()
     assert (run_dir / "final_plan.json").exists()
-    assert (run_dir / "validation.json").exists()
-    assert (run_dir / "semantic_sanity.json").exists()
-    assert (run_dir / "trace.json").exists()
     assert (run_dir / "summary.json").exists()
 
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    assert summary["backend_name"] == "gpt"
-    assert summary["model_name"] == "gpt-5.4"
+    assert summary["backend_name"] == "qwen_vl"
+    assert summary["model_name"] == "Qwen/Qwen2.5-VL-3B-Instruct"
     assert summary["planner_success"] is True
 
 
-def test_gpt_eval_run_gracefully_records_quota_failure(tmp_path):
+def test_qwen_eval_run_records_runtime_error_details(tmp_path):
     planner = DeterministicPlanner(
-        backend=OpenAIGPTPlannerBackend(
-            config=OpenAIPlannerConfig(api_key="test-key", model="gpt-5.4", reasoning_effort="medium", timeout_seconds=30.0, retry_count=1, max_output_tokens=2048),
-            client=FailingOpenAIClient(FakeRateLimitError()),
+        backend=QwenVLPlannerBackend(
+            config=QwenVLPlannerConfig(model="Qwen/Qwen2.5-VL-3B-Instruct"),
+            engine=FailingQwenEngine(),
         )
     )
     harness = EvaluationHarness(planner=planner)
     output_dir = tmp_path / "eval_outputs"
 
-    batch = harness.run_batch(EvalRequest(tasks=["door"], runs_per_task=1, output_dir=str(output_dir)))
+    batch = harness.run_batch(EvalRequest(tasks=["door"], runs_per_task=1, output_dir=str(output_dir), planner_mode="qwen_vl"))
 
-    run_dir = output_dir / "gpt" / "door" / "run_000"
+    run_dir = output_dir / "qwen_vl" / "door" / "run_000"
     assert batch.successful_runs == 1
-    assert (run_dir / "request.json").exists()
-    assert (run_dir / "prompt.json").exists()
-    assert (run_dir / "validation.json").exists()
-    assert (run_dir / "semantic_sanity.json").exists()
-    assert (run_dir / "summary.json").exists()
-    assert not (run_dir / "raw_response.json").exists()
-
-    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     prompt = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
-    assert summary["backend_name"] == "gpt"
+    logs = (run_dir / "logs.txt").read_text(encoding="utf-8")
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+
     assert summary["planner_success"] is True
     assert "backend::resynthesize_task_template" in summary["repairs_applied"]
-    assert prompt["request_payload"]["model"] == "gpt-5.4"
+    assert prompt["backend_error"]["exception_type"] == "RuntimeError"
+    assert "CUDA out of memory" in prompt["backend_error"]["message"]
+    assert "backend_error=" in logs

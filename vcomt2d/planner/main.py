@@ -9,6 +9,7 @@ from .base import Planner
 from .models import PlanningRequest, PlanningResult
 from .openai_backend import OpenAIGPTPlannerBackend
 from .pipeline import PlannerPipeline
+from .qwen_vl_backend import QwenVLPlannerBackend
 
 
 class DeterministicPlanner(Planner):
@@ -29,6 +30,8 @@ def planner_from_mode(planner_mode: str) -> Planner:
         return DeterministicPlanner()
     if planner_mode == PlannerMode.GPT.value:
         return DeterministicPlanner(backend=OpenAIGPTPlannerBackend())
+    if planner_mode == PlannerMode.QWEN_VL.value:
+        return DeterministicPlanner(backend=QwenVLPlannerBackend())
     if planner_mode in {"llm_stub", "vlm_stub"}:
         return DeterministicPlanner(backend=StubLLMPlannerBackend(fallback_backend=DeterministicTemplateBackend()))
     return DeterministicPlanner()

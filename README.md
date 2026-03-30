@@ -25,6 +25,7 @@ Implemented components:
 - multiple planner backends
   - deterministic baseline
   - real OpenAI GPT backend
+  - local `Qwen2.5-VL-3B-Instruct` backend
   - stub `LLM/VLM` backend
 - structured `PlanningRequest` / `PlanningResult`
 - JSON-serializable multi-robot `FSMPlan`
@@ -71,6 +72,7 @@ V-CoMT_2D/
 ├── README.md
 ├── pyproject.toml
 ├── requirements.txt
+├── requirements-vlm.txt
 ├── environment.yml
 ├── configs/
 │   └── sim2d/
@@ -103,8 +105,11 @@ V-CoMT_2D/
     │   ├── backends.py
     │   ├── openai_backend.py
     │   ├── openai_config.py
+    │   ├── qwen_vl_backend.py
+    │   ├── qwen_vl_config.py
     │   ├── pipeline.py
     │   ├── heuristics.py
+    │   ├── structured_output.py
     │   └── templates/
     ├── sim/
     │   └── tasks/
@@ -124,8 +129,14 @@ Main planner layers:
   - backend interface used by symbolic and model-based planners
 - `vcomt2d/planner/openai_backend.py`
   - `OpenAIGPTPlannerBackend` using the OpenAI `Responses API`
+- `vcomt2d/planner/qwen_vl_backend.py`
+  - `QwenVLPlannerBackend` using local `transformers` inference with `Qwen2.5-VL-3B-Instruct`
 - `vcomt2d/planner/openai_config.py`
   - OpenAI config loading from environment variables and `PlanningConfig`
+- `vcomt2d/planner/qwen_vl_config.py`
+  - local `Qwen` config loading from environment variables and `PlanningConfig`
+- `vcomt2d/planner/structured_output.py`
+  - shared prompt, schema, and JSON parsing helpers for model-based backends
 - `StubLLMPlannerBackend`
 - `vcomt2d/planner/pipeline.py`
   - orchestration for candidate generation, validation, semantic checks, repair, and result packaging
@@ -159,14 +170,22 @@ The backend architecture is ready for future `LLM/VLM` integration:
 Today the default backend is deterministic. The repository also includes:
 
 - a real OpenAI GPT backend using the `Responses API`
+- a local `Qwen2.5-VL-3B-Instruct` backend aimed at practical 8 GB VRAM use
 - a stub `LLM/VLM` backend for future model experiments
 
-The execution stack does not trust raw model output. Every GPT-generated candidate still goes through:
+The execution stack does not trust raw model output. Every model-generated candidate still goes through:
 
 - structural validation
 - semantic sanity checks
 - structural repair when applicable
 - deterministic semantic resynthesis when applicable
+
+For model-based backends, the pipeline may also fall back to deterministic template resynthesis if:
+
+- backend generation fails after artifacts are captured
+- structural repair still cannot recover a valid `FSM`
+
+This keeps execution safe while preserving the original model prompt/response for later analysis.
 
 ## Evaluation Harness
 
@@ -181,11 +200,13 @@ python3 scripts/run_eval.py --tasks door herding search relay --runs 1
 Useful evaluation switches:
 
 - `--backend`
-  - select `deterministic`, `gpt`, `llm_stub`, or `vlm_stub`
+  - select `deterministic`, `gpt`, `qwen_vl`, `llm_stub`, or `vlm_stub`
 - `--model`
-  - override the GPT model, for example `gpt-5.4`
+  - override the model, for example `gpt-5.4` or `Qwen/Qwen2.5-VL-3B-Instruct`
 - `--reasoning-effort`
   - override GPT reasoning effort
+- `--scene-image`
+  - render a planner input image for `Qwen` experiments
 - `--save-animation`
   - save per-run animation artifacts
 - `--output-dir`
@@ -236,6 +257,7 @@ Recommended baseline:
 
 - Python `3.10`
 - `OPENAI_API_KEY` for live GPT planning
+- NVIDIA GPU with about `8 GB VRAM` for the local `Qwen` backend
 - `ffmpeg` for `MP4` export
 - Linux, macOS, or Windows
 
@@ -255,6 +277,29 @@ micromamba create -f environment.yml
 micromamba activate vcomt2d
 ```
 
+### Optional: Install Local Qwen VLM Dependencies
+
+`Qwen2.5-VL-3B-Instruct` was chosen because it is a practical open-source `VLM` for structured planning experiments on an `8 GB VRAM` GPU. The backend is designed to use `4-bit quantization` by default through `bitsandbytes`.
+
+Install a CUDA-enabled `PyTorch` build first, using the selector from the official `PyTorch` site that matches your driver and CUDA runtime. Then install the extra local `VLM` packages:
+
+```bash
+pip install -r requirements-vlm.txt
+```
+
+The local `Qwen` backend uses:
+
+- `transformers`
+- `accelerate`
+- `bitsandbytes`
+- `qwen-vl-utils`
+- `jinja2>=3.1.0`
+
+For reproducible offline runs, set `QWEN_VL_LOCAL_FILES_ONLY=1` after the model has been downloaded once. The backend will resolve the cached Hugging Face `snapshot` directory and load the model/processor directly from disk.
+
+If your `transformers` build is too old for `Qwen2.5-VL`, upgrade it. The official model card explicitly recommends a recent `transformers` build.
+If `apply_chat_template(...)` fails, check that `jinja2` is at least `3.1.0`.
+
 ### Option B: Python venv
 
 ```bash
@@ -262,6 +307,12 @@ python3.10 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+For the local `Qwen` backend, install the same optional extras after your `PyTorch` install:
+
+```bash
+pip install -r requirements-vlm.txt
 ```
 
 ### OpenAI Credentials
@@ -281,6 +332,31 @@ export OPENAI_TIMEOUT_SECONDS=60
 export OPENAI_RETRY_COUNT=2
 export OPENAI_MAX_OUTPUT_TOKENS=4000
 ```
+
+### Local Qwen Backend Configuration
+
+Default local model:
+
+```bash
+export QWEN_VL_MODEL=Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+Useful optional overrides:
+
+```bash
+export QWEN_VL_LOAD_IN_4BIT=true
+export QWEN_VL_LOAD_IN_8BIT=false
+export QWEN_VL_DEVICE_MAP=auto
+export QWEN_VL_MAX_NEW_TOKENS=1536
+export QWEN_VL_TEMPERATURE=0.0
+export QWEN_VL_USE_SCENE_IMAGE=false
+```
+
+Notes:
+
+- `4-bit` loading is the default because it is the safest choice for `8 GB VRAM`
+- `--scene-image` or `QWEN_VL_USE_SCENE_IMAGE=true` adds a rendered planner input image
+- the first milestone still works with `instruction + structured world state` only
 
 ### Install ffmpeg
 
@@ -333,6 +409,13 @@ python3 scripts/plan_door_demo.py --backend gpt --model gpt-5.4
 python3 scripts/plan_search_demo.py --backend gpt --model gpt-5.4
 ```
 
+Run the same demos with local `Qwen`:
+
+```bash
+python3 scripts/plan_door_demo.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct
+python3 scripts/plan_search_demo.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --scene-image
+```
+
 Each planning demo prints:
 
 - reasoning summary
@@ -358,6 +441,15 @@ python3 scripts/animate_search_demo.py --backend gpt --model gpt-5.4
 python3 scripts/animate_relay_demo.py --backend gpt --model gpt-5.4
 ```
 
+Run local `Qwen` animation demos:
+
+```bash
+python3 scripts/animate_door_demo.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct
+python3 scripts/animate_herding_demo.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --scene-image
+python3 scripts/animate_search_demo.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --scene-image
+python3 scripts/animate_relay_demo.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct
+```
+
 If `ffmpeg` is available, the animation is saved as `MP4` under `outputs/animations/`.
 
 If `ffmpeg` is not available, the exporter prints a clear message and saves a `GIF` fallback instead.
@@ -376,6 +468,13 @@ Run GPT evaluation:
 python3 scripts/run_eval.py --backend gpt --model gpt-5.4 --tasks door relay --runs 1
 ```
 
+Run local `Qwen` evaluation:
+
+```bash
+python3 scripts/run_eval.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --tasks door search relay --runs 1
+python3 scripts/run_eval.py --backend qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --tasks door --runs 1 --scene-image --save-animation
+```
+
 Run the future-backend entrypoint with deterministic fallback:
 
 ```bash
@@ -388,10 +487,10 @@ Enable animation artifacts during evaluation:
 python3 scripts/run_eval.py --backend gpt --model gpt-5.4 --tasks search relay --runs 1 --save-animation
 ```
 
-Run side-by-side deterministic vs GPT comparison:
+Run side-by-side deterministic vs `Qwen` comparison:
 
 ```bash
-python3 scripts/run_backend_comparison.py --model gpt-5.4 --runs 1
+python3 scripts/run_backend_comparison.py --backends deterministic qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --runs 1
 ```
 
 ## Running Tests
@@ -411,6 +510,7 @@ Important test groups include:
 - repair regression tests
 - planner task tests
 - OpenAI backend config / prompt / parsing tests
+- local `Qwen` backend config / prompt / parsing tests
 - animation export tests
 - evaluation harness tests
 - backend / future integration tests
@@ -428,7 +528,7 @@ Behavior:
 
 This keeps demo and evaluation workflows deterministic and scriptable.
 
-## Deterministic Baseline vs GPT Backend
+## Deterministic Baseline vs Model Backends
 
 - `deterministic`
   - fastest and fully reproducible baseline
@@ -438,6 +538,12 @@ This keeps demo and evaluation workflows deterministic and scriptable.
   - uses `Structured Outputs` to request a schema-constrained `FSM` candidate
   - still gated by validator, semantic sanity checks, and repair
   - incurs external API latency and cost
+- `qwen_vl`
+  - local open-source `VLM` backend using `Qwen2.5-VL-3B-Instruct`
+  - selected because it is far more practical on `8 GB VRAM` than larger `7B/8B`-class `VLMs`
+  - defaults to `4-bit` loading for memory efficiency
+  - can use structured state only, or structured state plus a rendered scene image
+  - still gated by validator, semantic sanity checks, and repair
 - `llm_stub`
   - pipeline-only placeholder using deterministic fallback
 
@@ -445,6 +551,8 @@ This keeps demo and evaluation workflows deterministic and scriptable.
 
 - planner intent parsing is still rule-based
 - GPT planning is real but still experimental and may require repair or deterministic resynthesis
+- local `Qwen` planning is integrated behind lazy imports, but requires separate local model/runtime setup
+- the current repository environment does not bundle `torch` or `transformers` by default; those remain optional extras
 - live GPT runs require `OPENAI_API_KEY` and the `openai` Python package
 - physics, collision, and perception are intentionally simplified
 - execution semantics are lightweight and designed for pipeline validation, not realism benchmarking
@@ -452,7 +560,7 @@ This keeps demo and evaluation workflows deterministic and scriptable.
 
 ## Future Work
 
-- replace the stub backend with a real `LLM/VLM` planner adapter
+- strengthen the local `VLM` path with richer image-conditioned planning and replay fixtures
 - add richer semantic repair strategies beyond deterministic resynthesis
 - expand the evaluation harness with larger fixture banks and aggregate metrics
 - increase task realism with better topology reasoning and stronger failure semantics

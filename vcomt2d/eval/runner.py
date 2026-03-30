@@ -24,6 +24,7 @@ class EvaluationHarness:
     def __init__(self, planner: Optional[Planner] = None, executor: Optional[FSMExecutor] = None):
         self.planner = planner
         self.executor = executor or FSMExecutor()
+        self._planner_cache: Dict[tuple[str, str | None, str | None, bool], Planner] = {}
 
     def run_batch(self, request: EvalRequest) -> EvalBatchSummary:
         summaries: List[EvalRunSummary] = []
@@ -59,10 +60,12 @@ class EvaluationHarness:
             planning_config=PlanningConfig(
                 openai_model=request.model_name,
                 openai_reasoning_effort=request.reasoning_effort,
+                qwen_vl_model=request.model_name,
+                qwen_vl_use_scene_image=request.use_scene_image,
             ),
             planner_mode=request.planner_mode,
         )
-        planner = self.planner or planner_from_mode(request.planner_mode)
+        planner = self._resolve_planner(request)
         planning_result: PlanningResult = planner.plan(planning_request)
         backend_name = str(planning_result.debug_info.get("backend", request.planner_mode))
         model_name = planning_result.debug_info.get("model_name") or request.model_name
@@ -83,7 +86,14 @@ class EvaluationHarness:
             prompt_payload = {
                 "system_prompt": generation_debug.get("system_prompt"),
                 "prompt_payload": generation_debug.get("prompt_payload"),
+                "prompt_text": generation_debug.get("prompt_text"),
                 "request_payload": generation_debug.get("request_payload"),
+                "backend_error": generation_debug.get("runtime_error")
+                or generation_debug.get("api_error")
+                or generation_debug.get("model_load_error")
+                or generation_debug.get("import_error")
+                or generation_debug.get("quantization_error")
+                or generation_debug.get("vision_import_error"),
             }
             if any(value is not None for value in prompt_payload.values()):
                 artifact_paths.prompt_json = write_json(run_dir, "prompt.json", prompt_payload)
@@ -141,6 +151,21 @@ class EvaluationHarness:
             return generation if isinstance(generation, dict) else {}
         return backend_debug if isinstance(backend_debug, dict) else {}
 
+    def _resolve_planner(self, request: EvalRequest) -> Planner:
+        if self.planner is not None:
+            return self.planner
+        cache_key = (
+            request.planner_mode,
+            request.model_name,
+            request.reasoning_effort,
+            request.use_scene_image,
+        )
+        planner = self._planner_cache.get(cache_key)
+        if planner is None:
+            planner = planner_from_mode(request.planner_mode)
+            self._planner_cache[cache_key] = planner
+        return planner
+
     def _build_log_lines(self, planning_result: PlanningResult, execution_result: Optional[ExecutionResult]) -> List[str]:
         lines = [
             f"planner_success={planning_result.success}",
@@ -151,6 +176,19 @@ class EvaluationHarness:
             f"failure_reason={planning_result.failure_reason}",
             f"repairs_applied={planning_result.debug_info.get('applied_repairs', [])}",
         ]
+        generation_debug = self._generation_backend_debug(planning_result)
+        backend_error = None
+        if isinstance(generation_debug, dict):
+            backend_error = (
+                generation_debug.get("runtime_error")
+                or generation_debug.get("api_error")
+                or generation_debug.get("model_load_error")
+                or generation_debug.get("import_error")
+                or generation_debug.get("quantization_error")
+                or generation_debug.get("vision_import_error")
+            )
+        if backend_error is not None:
+            lines.append(f"backend_error={backend_error}")
         if execution_result is not None:
             lines.extend(
                 [

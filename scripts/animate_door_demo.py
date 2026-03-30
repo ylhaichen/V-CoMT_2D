@@ -3,4 +3,4 @@ from _demo_common import build_demo_parser, run_animation_demo
 
 if __name__ == "__main__":
     args = build_demo_parser("Run the door animation demo.").parse_args()
-    run_animation_demo("door", backend=args.backend, model=args.model, reasoning_effort=args.reasoning_effort, output_dir=args.output_dir)
+    run_animation_demo("door", backend=args.backend, model=args.model, reasoning_effort=args.reasoning_effort, scene_image=args.scene_image, output_dir=args.output_dir)

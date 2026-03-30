@@ -12,6 +12,10 @@
   - real OpenAI GPT backend using the `Responses API`
 - `openai_config.py`
   - environment/config loading for live GPT planning
+- `qwen_vl_backend.py`
+  - local `Qwen2.5-VL-3B-Instruct` backend for 8 GB VRAM-oriented experiments
+- `qwen_vl_config.py`
+  - local `Qwen` config loading from environment variables and `PlanningConfig`
 - `pipeline.py`
   - orchestration for generation, validation, semantic checks, and repair
 - `intent_parser.py`
@@ -42,7 +46,8 @@
 7. run structural repair if needed
 8. run semantic sanity checks
 9. run semantic repair / deterministic resynthesis if needed
-10. return `PlanningResult`
+10. if a model backend still cannot provide a usable plan, fall back to deterministic template resynthesis with artifacts preserved
+11. return `PlanningResult`
 
 ## Backends
 
@@ -53,6 +58,10 @@ Current backends:
 - `OpenAIGPTPlannerBackend`
   - real GPT-based candidate generator using OpenAI `Responses API`
   - requests `Structured Outputs` with a schema-constrained `FSM` response
+- `QwenVLPlannerBackend`
+  - local open-source `VLM` backend using `Qwen2.5-VL-3B-Instruct`
+  - targets 8 GB VRAM by default through `4-bit` loading when the local runtime is available
+  - can optionally attach a rendered planner input scene image
 - `StubLLMPlannerBackend`
   - future insertion point for `LLM/VLM` candidate generation
 
@@ -68,6 +77,28 @@ The GPT backend:
 - records prompt payloads, raw responses, parsed candidate plans, and repair outputs for replay
 
 The planner still does not trust raw model output. The validator, semantic sanity checks, and repair logic remain the source of truth.
+
+## Qwen Backend Notes
+
+The local `Qwen` backend:
+
+- uses `Qwen/Qwen2.5-VL-3B-Instruct` by default
+- is intended as the primary local open-source `VLM` backend
+- is configured for practical 8 GB VRAM operation via `bitsandbytes` `4-bit` loading by default
+- can operate on `instruction + structured world state` alone
+- can optionally add a rendered scene image when `QWEN_VL_USE_SCENE_IMAGE=true` or `--scene-image` is used
+- supports reproducible offline runs via `QWEN_VL_LOCAL_FILES_ONLY=1`, which resolves the cached Hugging Face `snapshot` path directly
+
+The runtime path is:
+
+1. build a shared planner prompt and structured payload
+2. optionally render a single scene snapshot
+3. run local generation through `transformers`
+4. parse the candidate JSON
+5. run the normal validation / semantic sanity / repair pipeline
+6. if the candidate still cannot be used, resynthesize from the deterministic template backend while preserving the original `Qwen` artifacts
+
+This keeps the local `VLM` backend on the same contract as the deterministic and GPT backends.
 
 ## Semantic Sanity Layer
 

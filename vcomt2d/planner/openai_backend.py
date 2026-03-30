@@ -3,110 +3,15 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from vcomt2d.core.skills import VALID_SKILLS
+from vcomt2d.core.types import to_serializable
 from vcomt2d.fsm.schema import FSMPlan
 
 from .backends import PlannerBackend, PlannerBackendError
 from .models import BackendPlanCandidate, PlanningContext
 from .openai_config import OpenAIPlannerConfig
-
-
-SUPPORTED_CONDITIONS = [
-    "timeout",
-    "all_actions_done",
-    "robot_in_region",
-    "both_in_region",
-    "object_in_region",
-    "signal_received",
-    "object_found",
-    "handoff_ready",
-    "flag_true",
-]
-
-
-PLANNER_RESPONSE_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["task_description", "reasoning_summary", "fsm"],
-    "properties": {
-        "task_description": {"type": "string"},
-        "reasoning_summary": {"type": "string"},
-        "fsm": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["initial_state", "states"],
-            "properties": {
-                "initial_state": {"type": "string"},
-                "states": {
-                    "type": "array",
-                    "minItems": 3,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["state_id", "robot_a", "robot_b", "transitions", "terminal", "status", "notes"],
-                        "properties": {
-                            "state_id": {"type": "string"},
-                            "robot_a": {
-                                "anyOf": [
-                                    {"type": "null"},
-                                    {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "required": ["skill", "params"],
-                                        "properties": {
-                                            "skill": {"type": "string"},
-                                            "params": {"type": "object", "additionalProperties": True},
-                                        },
-                                    },
-                                ]
-                            },
-                            "robot_b": {
-                                "anyOf": [
-                                    {"type": "null"},
-                                    {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "required": ["skill", "params"],
-                                        "properties": {
-                                            "skill": {"type": "string"},
-                                            "params": {"type": "object", "additionalProperties": True},
-                                        },
-                                    },
-                                ]
-                            },
-                            "transitions": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "required": ["to", "condition", "notes"],
-                                    "properties": {
-                                        "to": {"type": "string"},
-                                        "condition": {
-                                            "type": "object",
-                                            "additionalProperties": False,
-                                            "required": ["kind", "args"],
-                                            "properties": {
-                                                "kind": {"type": "string"},
-                                                "args": {"type": "object", "additionalProperties": True},
-                                            },
-                                        },
-                                        "notes": {"type": "string"},
-                                    },
-                                },
-                            },
-                            "terminal": {"type": "boolean"},
-                            "status": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                            "notes": {"type": "string"},
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
+from .structured_output import PLANNER_RESPONSE_SCHEMA, build_planner_system_prompt, build_planner_user_payload, parse_candidate_plan_text
 
 
 class OpenAIGPTPlannerBackend(PlannerBackend):
@@ -121,39 +26,50 @@ class OpenAIGPTPlannerBackend(PlannerBackend):
     def build_candidate(self, context: PlanningContext) -> BackendPlanCandidate:
         runtime_config = self.config or OpenAIPlannerConfig.from_planning_config(context.request.planning_config)
         client = self._get_client(runtime_config)
-        system_prompt = self._build_system_prompt()
-        user_payload = self._build_user_payload(context)
+        system_prompt = build_planner_system_prompt()
+        user_payload = build_planner_user_payload(context)
         request_payload = self._build_request_payload(runtime_config, system_prompt, user_payload)
-        response = client.responses.create(**request_payload)
+        backend_debug = {
+            "api": "responses",
+            "model_name": runtime_config.model,
+            "reasoning_effort": runtime_config.reasoning_effort,
+            "system_prompt": system_prompt,
+            "request_payload": request_payload,
+            "prompt_payload": user_payload,
+        }
+
+        try:
+            response = client.responses.create(**request_payload)
+        except Exception as exc:  # noqa: BLE001 - backend must translate SDK failures into planner failures
+            error_payload = self._exception_to_debug(exc)
+            backend_debug["api_error"] = error_payload
+            raise PlannerBackendError(self._classify_api_error(exc, error_payload), debug_info=backend_debug) from exc
+
         raw_response = self._response_to_dict(response)
         output_text = self._extract_output_text(response, raw_response)
         if not output_text:
-            raise PlannerBackendError("openai_response_missing_text")
+            backend_debug["raw_response"] = raw_response
+            raise PlannerBackendError("openai_response_missing_text", debug_info=backend_debug)
 
         try:
-            candidate_plan = json.loads(output_text)
+            candidate_plan = parse_candidate_plan_text(output_text)
         except json.JSONDecodeError as exc:
-            raise PlannerBackendError(f"openai_response_not_json:{exc}") from exc
+            backend_debug["raw_response"] = raw_response
+            backend_debug["response_text"] = output_text
+            raise PlannerBackendError(f"openai_response_not_json:{exc}", debug_info=backend_debug) from exc
 
         try:
             plan = FSMPlan.from_dict(candidate_plan)
         except Exception as exc:  # noqa: BLE001 - surface parser failure through planner backend error
-            raise PlannerBackendError(f"openai_candidate_parse_failed:{exc}") from exc
+            backend_debug["raw_response"] = raw_response
+            backend_debug["candidate_plan"] = candidate_plan
+            raise PlannerBackendError(f"openai_candidate_parse_failed:{exc}", debug_info=backend_debug) from exc
 
         return BackendPlanCandidate(
             backend_name=self.backend_name,
             model_name=runtime_config.model,
             plan=plan,
-            debug_info={
-                "api": "responses",
-                "model_name": runtime_config.model,
-                "reasoning_effort": runtime_config.reasoning_effort,
-                "system_prompt": system_prompt,
-                "request_payload": request_payload,
-                "prompt_payload": user_payload,
-                "raw_response": raw_response,
-                "candidate_plan": candidate_plan,
-            },
+            debug_info={**backend_debug, "raw_response": raw_response, "candidate_plan": candidate_plan},
         )
 
     def _get_client(self, runtime_config: OpenAIPlannerConfig):
@@ -171,46 +87,6 @@ class OpenAIGPTPlannerBackend(PlannerBackend):
             max_retries=runtime_config.retry_count,
         )
         return self._client
-
-    def _build_system_prompt(self) -> str:
-        return (
-            "You are the GPT planner backend for V-CoMT_2D. "
-            "Produce a multi-robot FSM plan for exactly two robots: robot_a and robot_b. "
-            f"Allowed skills: {sorted(VALID_SKILLS)}. "
-            f"Allowed condition kinds: {SUPPORTED_CONDITIONS}. "
-            "Return only a JSON object that matches the supplied schema. "
-            "Every non-terminal state must include actions for both robots, at least one success-path transition, and explicit timeout coverage to S_FAIL. "
-            "Use readable state names such as S0_INIT, S1_APPROACH, S_DONE, and S_FAIL. "
-            "Always include terminal success and failure states. "
-            "Plan for collaboration: even if one robot is primary, the second robot must have a meaningful support role. "
-            "Do not emit prose outside the JSON response."
-        )
-
-    def _build_user_payload(self, context: PlanningContext) -> Dict[str, Any]:
-        return {
-            "request_id": context.request.request_id,
-            "instruction": context.request.user_instruction,
-            "task_type_hint": None if context.intent.task_type is None else context.intent.task_type.value,
-            "intent_keywords": context.intent.matched_keywords,
-            "scene_facts_hint": context.scene_facts.to_dict(),
-            "role_assignment_hint": context.roles.to_dict(),
-            "world_state": context.request.world_state.to_dict(),
-            "fsm_requirements": {
-                "must_include_initial_state": True,
-                "must_include_success_terminal": True,
-                "must_include_failure_terminal": True,
-                "must_assign_both_robots": True,
-                "must_include_timeout_coverage": True,
-                "must_use_allowed_skills_only": True,
-                "must_be_json_serializable": True,
-            },
-            "completion_requirements": {
-                "T1_Door_Wedge_Pass_Through": "Both robots must reach the target-side region after a plausible hold/pass/follow sequence.",
-                "T2_Herding_Corralling": "The movable object must end in the goal region after setup plus push/funnel coordination.",
-                "T4_Collaborative_Search_Converge": "The target object must be found and both robots must converge to the target region.",
-                "T6_Relay_Delivery": "The payload must reach the far goal through a real relay with a handoff phase.",
-            },
-        }
 
     def _build_request_payload(self, runtime_config: OpenAIPlannerConfig, system_prompt: str, user_payload: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -258,3 +134,48 @@ class OpenAIGPTPlannerBackend(PlannerBackend):
                 if content.get("type") in {"output_text", "text"} and content.get("text"):
                     return content["text"]
         return ""
+
+    def _classify_api_error(self, exc: Exception, error_payload: Dict[str, Any]) -> str:
+        exc_type = exc.__class__.__name__
+        code = str(error_payload.get("code") or "").lower()
+        message = str(error_payload.get("message") or exc).lower()
+
+        if exc_type == "RateLimitError" and ("insufficient_quota" in code or "insufficient_quota" in message):
+            return "openai_insufficient_quota"
+        if exc_type == "RateLimitError":
+            return "openai_rate_limited"
+        if exc_type == "AuthenticationError":
+            return "openai_authentication_failed"
+        if exc_type == "PermissionDeniedError":
+            return "openai_permission_denied"
+        if exc_type == "BadRequestError":
+            return "openai_bad_request"
+        if exc_type in {"APITimeoutError", "TimeoutError"}:
+            return "openai_request_timed_out"
+        if exc_type in {"APIConnectionError", "APIStatusError"}:
+            return "openai_request_failed"
+        if "insufficient_quota" in code or "insufficient_quota" in message:
+            return "openai_insufficient_quota"
+        return "openai_request_failed"
+
+    def _exception_to_debug(self, exc: Exception) -> Dict[str, Any]:
+        body = getattr(exc, "body", None)
+        message = str(exc)
+        code = None
+        error_type = None
+
+        if isinstance(body, dict):
+            error_payload = body.get("error", body)
+            if isinstance(error_payload, dict):
+                code = error_payload.get("code")
+                error_type = error_payload.get("type")
+                message = str(error_payload.get("message", message))
+
+        return {
+            "exception_type": exc.__class__.__name__,
+            "message": message,
+            "status_code": getattr(exc, "status_code", None),
+            "code": code,
+            "error_type": error_type,
+            "body": to_serializable(body),
+        }

@@ -8,10 +8,17 @@ It supports:
 
 - deterministic batch runs
 - GPT-backed batch runs
+- local `Qwen2.5-VL-3B-Instruct` batch runs
 - per-run artifacts
 - machine-readable summaries
 - animation export during evaluation
 - failure analysis through stored traces and logs
+
+For model-based backends, the harness also preserves enough artifacts to distinguish:
+
+- raw model generation success or failure
+- structural / semantic repair activity
+- deterministic resynthesis fallback activity
 
 ## Main Entry Point
 
@@ -28,11 +35,15 @@ python3 scripts/run_eval.py --tasks door herding search relay --runs 1
 - `--runs`
   - deterministic repetitions per task
 - `--backend`
-  - choose `deterministic`, `gpt`, `llm_stub`, or `vlm_stub`
+  - choose `deterministic`, `gpt`, `qwen_vl`, `llm_stub`, or `vlm_stub`
 - `--model`
-  - override the GPT model name
+  - override the model name for GPT or `Qwen`
 - `--reasoning-effort`
   - override GPT reasoning effort
+- `--scene-image`
+  - render a planner input image for `Qwen` experiments
+- `QWEN_VL_LOCAL_FILES_ONLY=1`
+  - recommended environment variable for offline local `Qwen` runs after the model has been cached once
 - `--output-dir`
   - custom artifact root
 - `--save-animation`
@@ -92,9 +103,10 @@ The evaluation harness is designed for:
 - planner/backend comparison
 - future large-scale fixture banks
 - future `LLM/VLM` planner benchmarking against the deterministic baseline
+- local-vs-remote backend comparison using the same artifact schema
 
 For side-by-side runs, use:
 
 ```bash
-python3 scripts/run_backend_comparison.py --model gpt-5.4 --runs 1
+python3 scripts/run_backend_comparison.py --backends deterministic qwen_vl --model Qwen/Qwen2.5-VL-3B-Instruct --runs 1
 ```

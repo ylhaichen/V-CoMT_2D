@@ -33,3 +33,14 @@ class PlanningConfig:
     openai_timeout_seconds: Optional[float] = None
     openai_retry_count: Optional[int] = None
     openai_max_output_tokens: Optional[int] = None
+    qwen_vl_model: Optional[str] = None
+    qwen_vl_max_new_tokens: Optional[int] = None
+    qwen_vl_temperature: Optional[float] = None
+    qwen_vl_device_map: Optional[str] = None
+    qwen_vl_local_files_only: Optional[bool] = None
+    qwen_vl_load_in_4bit: Optional[bool] = None
+    qwen_vl_load_in_8bit: Optional[bool] = None
+    qwen_vl_use_scene_image: Optional[bool] = None
+    qwen_vl_attn_implementation: Optional[str] = None
+    qwen_vl_min_pixels: Optional[int] = None
+    qwen_vl_max_pixels: Optional[int] = None

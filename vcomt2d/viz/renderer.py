@@ -17,15 +17,16 @@ ROBOT_COLORS = {"robot_a": "#1f77b4", "robot_b": "#d62728"}
 OBJECT_COLORS = {"ball": "#17becf", "box": "#7f7f7f"}
 
 
-def render_trace_frame(ax, frame, task_type: str) -> None:
-    snapshot = frame.world_snapshot["world_state"]
+def _draw_world_snapshot(ax, snapshot, title: str, subtitle: str | None = None, robot_actions: Dict[str, dict] | None = None, events: list[str] | None = None) -> None:
+    robot_actions = robot_actions or {}
+    events = events or []
     bounds = snapshot["bounds"]
     ax.clear()
     ax.set_xlim(0, bounds[0])
     ax.set_ylim(0, bounds[1])
     ax.set_aspect("equal")
-    ax.set_title(f"{task_type} | tick={frame.tick} | state={frame.state_id}")
-    ax.set_xlabel(f"transition={frame.transition_reason} -> {frame.next_state}")
+    ax.set_title(title)
+    ax.set_xlabel(subtitle or "")
     ax.grid(alpha=0.15)
 
     for goal in snapshot.get("goals", []):
@@ -54,12 +55,12 @@ def render_trace_frame(ax, frame, task_type: str) -> None:
         color = ROBOT_COLORS.get(robot["robot_id"], "#000000")
         circle = Circle((robot["pose"]["x"], robot["pose"]["y"]), 0.35, color=color, alpha=0.85)
         ax.add_patch(circle)
-        action = frame.robot_actions.get(robot["robot_id"], {})
+        action = robot_actions.get(robot["robot_id"], {})
         ax.text(robot["pose"]["x"], robot["pose"]["y"] + 0.45, robot["robot_id"], fontsize=8, ha="center")
-        legend_rows.append(f"{robot['robot_id']}: {action.get('skill', 'N/A')}")
+        legend_rows.append(f"{robot['robot_id']}: {action.get('skill', 'IDLE')}")
 
-    if frame.events:
-        legend_rows.extend(frame.events[-2:])
+    if events:
+        legend_rows.extend(events[-2:])
     if legend_rows:
         ax.text(
             0.02,
@@ -70,3 +71,24 @@ def render_trace_frame(ax, frame, task_type: str) -> None:
             va="top",
             bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75},
         )
+
+
+def render_trace_frame(ax, frame, task_type: str) -> None:
+    snapshot = frame.world_snapshot["world_state"]
+    _draw_world_snapshot(
+        ax,
+        snapshot,
+        title=f"{task_type} | tick={frame.tick} | state={frame.state_id}",
+        subtitle=f"transition={frame.transition_reason} -> {frame.next_state}",
+        robot_actions=frame.robot_actions,
+        events=frame.events,
+    )
+
+
+def save_world_state_snapshot(world_state, output_path: str, title: str = "Planner Input Snapshot") -> str:
+    fig, ax = plt.subplots(figsize=(7, 7))
+    _draw_world_snapshot(ax, world_state.to_dict(), title=title)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return output_path

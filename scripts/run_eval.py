@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             PlannerMode.DETERMINISTIC.value,
             PlannerMode.GPT.value,
+            PlannerMode.QWEN_VL.value,
             PlannerMode.LLM_STUB.value,
             PlannerMode.VLM_STUB.value,
             PlannerMode.SCRIPTED.value,
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model", default=None, help="Override the backend model name, for example gpt-5.4.")
     parser.add_argument("--reasoning-effort", default=None, help="Override backend reasoning effort, for example low, medium, or high.")
+    parser.add_argument("--scene-image", action="store_true", help="Render the planner input scene as an image for backends that support image-conditioned planning.")
     return parser
 
 
@@ -55,6 +57,7 @@ def main() -> None:
         planner_mode=args.planner_mode,
         model_name=args.model,
         reasoning_effort=args.reasoning_effort,
+        use_scene_image=args.scene_image,
     )
     summary = EvaluationHarness().run_batch(request)
     print(json.dumps(summary.to_dict(), indent=2))

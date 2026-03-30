@@ -21,14 +21,15 @@ from vcomt2d.sim.tasks.catalog import TASK_SCENARIOS
 
 def build_demo_parser(description: str, default_output_dir: str = "outputs/demos") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--backend", default="deterministic", choices=["deterministic", "gpt", "llm_stub", "vlm_stub"], help="Planner backend to use.")
+    parser.add_argument("--backend", default="deterministic", choices=["deterministic", "gpt", "qwen_vl", "llm_stub", "vlm_stub"], help="Planner backend to use.")
     parser.add_argument("--model", default=None, help="Optional backend model override.")
     parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override.")
+    parser.add_argument("--scene-image", action="store_true", help="Render and attach a planner input image for local VLM backends.")
     parser.add_argument("--output-dir", default=default_output_dir, help="Directory used for saved demo artifacts.")
     return parser
 
 
-def run_planning_demo(task_name: str, backend: str = "deterministic", model: str | None = None, reasoning_effort: str | None = None) -> None:
+def run_planning_demo(task_name: str, backend: str = "deterministic", model: str | None = None, reasoning_effort: str | None = None, scene_image: bool = False) -> None:
     scenario = TASK_SCENARIOS[task_name]
     planner = planner_from_mode(backend)
     request = PlanningRequest(
@@ -36,7 +37,12 @@ def run_planning_demo(task_name: str, backend: str = "deterministic", model: str
         user_instruction=scenario.instruction,
         world_state=scenario.fixture_builder(),
         planner_mode=backend,
-        planning_config=PlanningConfig(openai_model=model, openai_reasoning_effort=reasoning_effort),
+        planning_config=PlanningConfig(
+            openai_model=model,
+            openai_reasoning_effort=reasoning_effort,
+            qwen_vl_model=model,
+            qwen_vl_use_scene_image=scene_image,
+        ),
     )
     result = planner.plan(request)
     print(f"== {task_name.upper()} Planning Demo ==")
@@ -57,6 +63,7 @@ def run_animation_demo(
     backend: str = "deterministic",
     model: str | None = None,
     reasoning_effort: str | None = None,
+    scene_image: bool = False,
     output_dir: str = "outputs/demos",
 ) -> None:
     harness = EvaluationHarness()
@@ -69,6 +76,7 @@ def run_animation_demo(
             planner_mode=backend,
             model_name=model,
             reasoning_effort=reasoning_effort,
+            use_scene_image=scene_image,
         )
     )
     summary = batch.runs[0]

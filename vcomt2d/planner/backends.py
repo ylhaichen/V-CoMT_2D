@@ -23,6 +23,10 @@ TEMPLATE_BUILDERS: Dict[TaskType, Callable] = {
 class PlannerBackendError(RuntimeError):
     """Raised when a planner backend cannot produce a candidate plan."""
 
+    def __init__(self, message: str, *, debug_info: Dict[str, object] | None = None):
+        super().__init__(message)
+        self.debug_info = debug_info or {}
+
 
 class PlannerBackend(ABC):
     """Backend interface for candidate plan generation."""

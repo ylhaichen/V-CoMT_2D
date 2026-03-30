@@ -71,28 +71,54 @@ class PlannerPipeline:
             reasoning_summary=self._build_reasoning_summary(intent.to_dict(), scene_facts.to_dict(), roles.to_dict()),
         )
 
+        repair_backend_debug: list[Dict[str, object]] = []
+        applied_repairs: list[str] = []
+        generation_backend_name = self.generation_backend.backend_name
+        generation_model_name: Optional[str] = None
+        generation_debug: Dict[str, object] = {}
+
         try:
             candidate_bundle = self.generation_backend.build_candidate(context)
+            generation_backend_name = candidate_bundle.backend_name
+            generation_model_name = candidate_bundle.model_name
+            generation_debug = candidate_bundle.debug_info
         except PlannerBackendError as exc:
-            return PlanningResult(
-                success=False,
-                task_type=intent.task_type.value,
-                reasoning_summary=context.reasoning_summary,
-                plan=None,
-                validation={"valid": False, "errors": []},
-                semantic_validation={"passed": False, "warnings": [], "errors": [], "suggested_repairs": [], "debug_info": {}},
-                retries_used=0,
-                failure_reason=str(exc),
-                debug_info={"intent": intent.to_dict(), "scene_facts": scene_facts.to_dict(), "roles": roles.to_dict(), "backend": self.generation_backend.backend_name},
-            )
+            backend_debug = exc.debug_info if isinstance(exc.debug_info, dict) else {}
+            generation_model_name = backend_debug.get("model_name") if isinstance(backend_debug, dict) else None
+            generation_debug = backend_debug
+            candidate_bundle = None
+            if str(exc) != "llm_backend_not_configured":
+                candidate_bundle = self._resynthesize_candidate(
+                    request=request,
+                    context=context,
+                    repair_backend_debug=repair_backend_debug,
+                    repair_label="backend::resynthesize_task_template",
+                )
+            if candidate_bundle is None:
+                return PlanningResult(
+                    success=False,
+                    task_type=intent.task_type.value,
+                    reasoning_summary=context.reasoning_summary,
+                    plan=None,
+                    validation={"valid": False, "errors": []},
+                    semantic_validation={"passed": False, "warnings": [], "errors": [], "suggested_repairs": [], "debug_info": {}},
+                    retries_used=0,
+                    failure_reason=str(exc),
+                    debug_info={
+                        "intent": intent.to_dict(),
+                        "scene_facts": scene_facts.to_dict(),
+                        "roles": roles.to_dict(),
+                        "backend": generation_backend_name,
+                        "model_name": generation_model_name,
+                        "backend_debug": generation_debug,
+                    },
+                )
+            applied_repairs.append("backend::resynthesize_task_template")
 
-        generation_candidate_bundle = candidate_bundle
-        repair_backend_debug: list[Dict[str, object]] = []
         candidate = candidate_bundle.plan
         validation = validate_candidate(candidate)
         repairer = PlanRepairer(request.planning_config)
         retries = 0
-        applied_repairs = []
 
         while not validation.valid and request.planning_config.allow_repair and retries < request.planning_config.max_retries:
             repair_result = repairer.repair(candidate, validation)
@@ -102,17 +128,40 @@ class PlannerPipeline:
             retries += 1
 
         if not validation.valid:
-            return self._failure_result(
+            resynthesized_bundle = self._resynthesize_candidate(
                 request=request,
                 context=context,
-                validation=validation_to_debug(validation),
-                semantic_result=semantic_result,
-                retries_used=retries,
-                failure_reason="plan_validation_failed",
-                applied_repairs=applied_repairs,
-                plan=None if request.planning_config.strict_validation else candidate,
-                backend_debug=candidate_bundle.debug_info,
+                repair_backend_debug=repair_backend_debug,
+                repair_label="structural::resynthesize_task_template",
             )
+            if resynthesized_bundle is not None:
+                candidate_bundle = resynthesized_bundle
+                candidate = candidate_bundle.plan
+                applied_repairs.append("structural::resynthesize_task_template")
+                validation = validate_candidate(candidate)
+                while not validation.valid and request.planning_config.allow_repair and retries < request.planning_config.max_retries:
+                    repair_result = repairer.repair(candidate, validation)
+                    candidate = repair_result.plan
+                    applied_repairs.extend(repair_result.applied_repairs)
+                    validation = validate_candidate(candidate)
+                    retries += 1
+
+            if not validation.valid:
+                return self._failure_result(
+                    request=request,
+                    context=context,
+                    validation=validation_to_debug(validation),
+                    semantic_result=semantic_result,
+                    retries_used=retries,
+                    failure_reason="plan_validation_failed",
+                    applied_repairs=applied_repairs,
+                    generation_backend_name=generation_backend_name,
+                    generation_model_name=generation_model_name,
+                    generation_debug=generation_debug,
+                    repair_backend_debug=repair_backend_debug,
+                    final_candidate_backend=candidate_bundle.backend_name,
+                    plan=None if request.planning_config.strict_validation else candidate,
+                )
 
         if request.planning_config.enable_semantic_checks:
             semantic_validation = self.semantic_checker.check(context.intent.task_type, candidate, request.world_state, context.scene_facts, context.roles)
@@ -156,8 +205,12 @@ class PlannerPipeline:
                             retries_used=retries + semantic_retries,
                             failure_reason="plan_validation_failed_after_semantic_repair",
                             applied_repairs=applied_repairs,
+                            generation_backend_name=generation_backend_name,
+                            generation_model_name=generation_model_name,
+                            generation_debug=generation_debug,
+                            repair_backend_debug=repair_backend_debug,
+                            final_candidate_backend=candidate_bundle.backend_name,
                             plan=None if request.planning_config.strict_validation else candidate,
-                            backend_debug=candidate_bundle.debug_info,
                         )
                 semantic_validation = self.semantic_checker.check(context.intent.task_type, candidate, request.world_state, context.scene_facts, context.roles)
                 semantic_result = semantic_validation.to_dict()
@@ -173,8 +226,12 @@ class PlannerPipeline:
                     retries_used=retries,
                     failure_reason="semantic_sanity_failed",
                     applied_repairs=applied_repairs,
+                    generation_backend_name=generation_backend_name,
+                    generation_model_name=generation_model_name,
+                    generation_debug=generation_debug,
+                    repair_backend_debug=repair_backend_debug,
+                    final_candidate_backend=candidate_bundle.backend_name,
                     plan=None if request.planning_config.strict_validation else candidate,
-                    backend_debug=candidate_bundle.debug_info,
                 )
 
         return PlanningResult(
@@ -190,10 +247,10 @@ class PlannerPipeline:
                 "intent": context.intent.to_dict(),
                 "scene_facts": context.scene_facts.to_dict(),
                 "roles": context.roles.to_dict(),
-                "backend": generation_candidate_bundle.backend_name,
-                "model_name": generation_candidate_bundle.model_name,
+                "backend": generation_backend_name,
+                "model_name": generation_model_name,
                 "backend_debug": {
-                    "generation": generation_candidate_bundle.debug_info,
+                    "generation": generation_debug,
                     "repair_candidates": repair_backend_debug,
                     "final_candidate_backend": candidate_bundle.backend_name,
                 },
@@ -210,7 +267,11 @@ class PlannerPipeline:
         retries_used: int,
         failure_reason: str,
         applied_repairs: list[str],
-        backend_debug: Dict[str, object],
+        generation_backend_name: str,
+        generation_model_name: Optional[str],
+        generation_debug: Dict[str, object],
+        repair_backend_debug: list[Dict[str, object]],
+        final_candidate_backend: str,
         plan,
     ) -> PlanningResult:
         return PlanningResult(
@@ -226,12 +287,39 @@ class PlannerPipeline:
                 "intent": context.intent.to_dict(),
                 "scene_facts": context.scene_facts.to_dict(),
                 "roles": context.roles.to_dict(),
-                "backend": self.generation_backend.backend_name,
-                "model_name": backend_debug.get("model_name") if isinstance(backend_debug, dict) else None,
-                "backend_debug": backend_debug,
+                "backend": generation_backend_name,
+                "model_name": generation_model_name,
+                "backend_debug": {
+                    "generation": generation_debug,
+                    "repair_candidates": repair_backend_debug,
+                    "final_candidate_backend": final_candidate_backend,
+                },
                 "applied_repairs": applied_repairs,
             },
         )
+
+    def _resynthesize_candidate(
+        self,
+        *,
+        request: PlanningRequest,
+        context: PlanningContext,
+        repair_backend_debug: list[Dict[str, object]],
+        repair_label: str,
+    ):
+        if not request.planning_config.allow_repair:
+            return None
+        if self.generation_backend.backend_name == self.repair_backend.backend_name:
+            return None
+        candidate_bundle = self.repair_backend.build_candidate(context)
+        repair_backend_debug.append(
+            {
+                "backend": candidate_bundle.backend_name,
+                "model_name": candidate_bundle.model_name,
+                "reason": repair_label,
+                "debug_info": candidate_bundle.debug_info,
+            }
+        )
+        return candidate_bundle
 
     def _build_reasoning_summary(self, intent_payload: Dict[str, object], scene_payload: Dict[str, object], roles_payload: Dict[str, object]) -> str:
         return (

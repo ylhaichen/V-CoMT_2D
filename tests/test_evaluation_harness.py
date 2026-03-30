@@ -103,3 +103,25 @@ def test_animation_paths_recorded_when_enabled(tmp_path):
     assert animation_path is not None
     assert Path(animation_path).exists()
     assert animation_path.endswith((".mp4", ".gif"))
+
+
+def test_eval_harness_reuses_cached_planner_for_same_backend(tmp_path, monkeypatch):
+    calls = []
+
+    class CountingPlanner:
+        def plan(self, request):
+            from vcomt2d.planner.main import DeterministicPlanner
+
+            return DeterministicPlanner().plan(request)
+
+    def fake_planner_from_mode(mode):
+        calls.append(mode)
+        return CountingPlanner()
+
+    monkeypatch.setattr("vcomt2d.eval.runner.planner_from_mode", fake_planner_from_mode)
+
+    output_dir = tmp_path / "eval_outputs"
+    harness = EvaluationHarness()
+    harness.run_batch(EvalRequest(tasks=["door", "relay"], runs_per_task=1, output_dir=str(output_dir)))
+
+    assert calls == ["deterministic"]

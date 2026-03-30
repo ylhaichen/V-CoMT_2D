@@ -5,4 +5,6 @@ __pycache__/
 outputs/animations/*.gif
 outputs/animations/*.mp4
 outputs/demos/
+outputs/demos_*/
 outputs/eval/
+outputs/eval_*/
