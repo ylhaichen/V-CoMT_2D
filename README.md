@@ -1,49 +1,34 @@
 # V-CoMT_2D
 
-V-CoMT_2D is a lightweight 2D prototype for validating the end-to-end planning pipeline of a hierarchical multi-robot collaboration system.
+V-CoMT_2D is a lightweight 2D research prototype for validating the end-to-end planning pipeline of a hierarchical multi-robot collaboration system.
 
-It is intentionally optimized for:
+The project is intentionally planner-first. It focuses on:
 
-- deterministic planning behavior
-- explicit FSM contracts
-- validation and repair
-- debugging and observability
-- quick iteration before a future 3D / VLM-backed integration
+- explicit `FSM` contracts
+- deterministic and reproducible planning
+- structural validation and semantic sanity checks
+- repair and retry flows
+- execution traces and animation artifacts
+- benchmark-style batch evaluation
 
 It is not intended to be a high-fidelity simulator.
 
-## Overview
+## What The Repository Currently Supports
 
-The current milestone focuses on a robust planner-facing stack:
+Current pipeline:
 
-`instruction -> intent parsing -> scene interpretation -> role assignment -> FSM synthesis -> structural validation -> semantic sanity checks -> repair/retry -> execution -> animation export`
+`instruction -> intent parsing -> scene interpretation -> role assignment -> planner backend -> FSM synthesis -> structural validation -> semantic sanity checks -> repair / resynthesis -> execution -> trace -> animation / evaluation artifacts`
 
-The repository already includes:
+Implemented components:
 
-- a deterministic planner contract
-- a JSON-serializable multi-robot FSM schema
-- a structural FSM validator
-- a task-aware semantic sanity checker
-- bounded structural and semantic repair flows
-- a lightweight deterministic executor
-- planning demo scripts
-- animation demo scripts
-- MP4 export when `ffmpeg` is available
-- explicit GIF fallback when `ffmpeg` is not available
-
-## Features
-
-- Deterministic symbolic planner with a stable API
-- Structured `PlanningRequest` / `PlanningResult`
-- Scene-aware role assignment for `robot_a` and `robot_b`
-- Multi-state FSM synthesis for supported collaborative tasks
-- Structural FSM validation
-- Semantic planner sanity checks
-- Explicit repair/retry pipeline
-- Deterministic execution trace generation
-- Matplotlib-based 2D animation rendering
-- MP4 export support through `ffmpeg`
-- Unit, integration, regression, and export tests
+- stable planner API through `DeterministicPlanner.plan(request)`
+- structured `PlanningRequest` / `PlanningResult`
+- JSON-serializable multi-robot `FSMPlan`
+- structural `FSM` validator and bounded repair layer
+- task-aware semantic sanity checker
+- deterministic execution engine for the shared skill vocabulary
+- `MP4` export through `ffmpeg`, with explicit `GIF` fallback
+- evaluation harness for batch runs and artifact collection
 
 ## Supported Tasks
 
@@ -83,19 +68,18 @@ V-CoMT_2D/
 ├── pyproject.toml
 ├── requirements.txt
 ├── environment.yml
-├── .gitignore
 ├── configs/
 │   └── sim2d/
-│       └── planner_config.json
 ├── docs/
 │   ├── architecture.md
+│   ├── evaluation.md
+│   ├── fsm_schema.md
 │   ├── planner.md
-│   ├── tasks.md
-│   └── fsm_schema.md
+│   └── tasks.md
 ├── outputs/
-│   └── animations/
+│   ├── animations/
+│   └── eval/
 ├── scripts/
-│   ├── _demo_common.py
 │   ├── plan_door_demo.py
 │   ├── plan_herding_demo.py
 │   ├── plan_search_demo.py
@@ -103,24 +87,17 @@ V-CoMT_2D/
 │   ├── animate_door_demo.py
 │   ├── animate_herding_demo.py
 │   ├── animate_search_demo.py
-│   └── animate_relay_demo.py
+│   ├── animate_relay_demo.py
+│   └── run_eval.py
 ├── tests/
-│   ├── test_animation_export.py
-│   ├── test_intent_parser.py
-│   ├── test_planner_door.py
-│   ├── test_planner_herding.py
-│   ├── test_planner_relay.py
-│   ├── test_planner_search.py
-│   ├── test_regression.py
-│   ├── test_repair.py
-│   ├── test_role_assignment.py
-│   ├── test_scene_interpreter.py
-│   ├── test_semantic_sanity.py
-│   └── test_validator_integration.py
 └── vcomt2d/
     ├── core/
+    ├── eval/
     ├── fsm/
     ├── planner/
+    │   ├── backends.py
+    │   ├── pipeline.py
+    │   ├── heuristics.py
     │   └── templates/
     ├── sim/
     │   └── tasks/
@@ -129,250 +106,164 @@ V-CoMT_2D/
 
 ## Planner Architecture
 
-The planner is modular and intended to remain the long-term contract between a future VLM/LLM planner and the downstream executor.
+The planner contract stays stable while the candidate generation backend can change.
 
-Key modules:
+Main planner layers:
 
+- `vcomt2d/planner/base.py`
+  - top-level planner interface
+- `vcomt2d/planner/backends.py`
+  - `DeterministicTemplateBackend`
+  - `StubLLMPlannerBackend`
+- `vcomt2d/planner/pipeline.py`
+  - orchestration for candidate generation, validation, semantic checks, repair, and result packaging
 - `vcomt2d/planner/intent_parser.py`
-  - maps natural-language instructions to supported task families
+  - maps vague instructions to supported task families
 - `vcomt2d/planner/scene_interpreter.py`
-  - extracts task-relevant facts from a structured 2D `WorldState`
+  - extracts scene facts from structured `WorldState`
+- `vcomt2d/planner/heuristics.py`
+  - reusable geometry-aware heuristics for roles, relay handoff selection, and task realism
 - `vcomt2d/planner/role_assignment.py`
-  - assigns deterministic collaborative roles based on geometry
+  - deterministic role assignment built on task heuristics
 - `vcomt2d/planner/templates/`
-  - one deterministic FSM synthesis module per task family
+  - per-task deterministic `FSM` synthesis
 - `vcomt2d/planner/repair.py`
-  - structural repair logic
+  - structural `FSM` repair
 - `vcomt2d/planner/semantic_checks.py`
-  - task-aware semantic sanity checks and semantic repair
-- `vcomt2d/planner/main.py`
-  - top-level orchestration entrypoint
+  - semantic sanity validation and deterministic resynthesis
 
-Top-level API:
+### Backend Flow
 
-```python
-from vcomt2d.planner.main import DeterministicPlanner
-from vcomt2d.planner.models import PlanningRequest
+The backend architecture is ready for future `LLM/VLM` integration:
 
-planner = DeterministicPlanner()
-result = planner.plan(request)
+1. `instruction + world_state` are converted into a `PlanningContext`
+2. a planner backend produces a candidate `FSMPlan`
+3. structural validation runs
+4. structural repair runs if needed
+5. semantic sanity checks run
+6. semantic repair / resynthesis runs if needed
+7. final `PlanningResult` is returned
+
+Today the default backend is deterministic. A stub `LLM/VLM` backend is included as the insertion point for future model-generated candidate plans.
+
+## Evaluation Harness
+
+The repository includes a batch evaluation harness for planner/executor benchmarking.
+
+Main entrypoint:
+
+```bash
+python3 scripts/run_eval.py --tasks door herding search relay --runs 1
 ```
 
-## Planner Input
+Useful evaluation switches:
 
-The planner consumes a structured `PlanningRequest` containing:
+- `--planner-mode`
+  - select `deterministic`, `llm_stub`, or `vlm_stub`
+- `--animation`
+  - save per-run animation artifacts
+- `--output-dir`
+  - override the artifact root directory
+- `--no-logs`
+  - skip `logs.txt`
 
-- `request_id`
-- `user_instruction`
-- `world_state`
-- `planning_config`
-- `history`
-- `retry_count`
-- `planner_mode`
+What each run records:
 
-`world_state` is serializable and includes:
+- planner success
+- structural validation result
+- semantic sanity result
+- repair and retry count
+- execution success
+- failure reason
+- execution step count
+- per-run artifacts
 
-- robot states
-- object states
-- door states
-- goal / region definitions
-- obstacles
-- topology links
-- task-specific facts
+Artifact layout:
 
-## Planner Output
-
-The planner returns a structured `PlanningResult` containing:
-
-- `success`
-- `task_type`
-- `reasoning_summary`
-- `plan`
-- `validation`
-- `semantic_validation`
-- `retries_used`
-- `failure_reason`
-- `debug_info`
-
-The `plan` field is an `FSMPlan` with:
-
-- `task_description`
-- `reasoning_summary`
-- `fsm.initial_state`
-- `fsm.states`
-
-Each non-terminal state contains:
-
-- `robot_a` action
-- `robot_b` action
-- structured transitions
-- timeout coverage
-
-Terminal states explicitly encode:
-
-- success
-- failure
-
-## Structural Validation
-
-Structural validation checks:
-
-- initial state exists
-- state names are unique
-- transition targets exist
-- non-terminal states contain actions for both robots
-- non-terminal states have transitions
-- non-terminal states have timeout coverage
-- valid terminal success/failure states exist
-- skill names are valid
-- action parameters are structurally valid
-- the graph is reachable from the initial state
-- orphan states are rejected
-
-## Semantic Sanity Checks
-
-Structural validity is not enough, so the planner also runs task-aware semantic sanity checks before returning success.
-
-These checks catch plans that are structurally valid but strategically wrong.
-
-Current semantic checks include:
-
-- **T1 Door Wedge & Pass-Through**
-  - valid wedgeable door
-  - plausible holder selection
-  - correct wait / pass / follow ordering
-  - terminal condition tied to both robots reaching the target side
-- **T2 Herding / Corralling**
-  - movable target object exists
-  - valid goal region exists
-  - setup phase exists before pushing
-  - pusher / blocker roles are geometrically plausible
-  - terminal condition depends on object-in-goal
-- **T4 Collaborative Search & Converge**
-  - differentiated search partition
-  - explicit found/report coordination
-  - partner convergence after discovery
-  - terminal condition reflects rendezvous semantics
-- **T6 Relay Delivery**
-  - valid payload, handoff region, and goal
-  - plausible starter / finisher choice
-  - actual relay structure, not single-robot pseudo-relay
-  - terminal condition depends on payload reaching the goal
-
-Semantic results are returned as a structured object with:
-
-- `passed`
-- `warnings`
-- `errors`
-- `suggested_repairs`
-- `debug_info`
+```text
+outputs/
+  eval/
+    <task_name>/
+      run_000/
+        plan.json
+        trace.json
+        summary.json
+        logs.txt
+        animation.mp4
+    batch_summary.json
+```
 
 ## Environment Setup
 
 ### Prerequisites
 
-Recommended:
+Recommended baseline:
 
 - Python `3.10`
-- Linux, macOS, or Windows with a working Python environment
-- `ffmpeg` if you want MP4 export
+- `ffmpeg` for `MP4` export
+- Linux, macOS, or Windows
 
-The repository has been tested with:
+### Option A: Conda / Micromamba
 
-- Python `3.10.12`
-- Ubuntu `22.04`
-
-### Option A: Conda / Micromamba Setup
-
-Create the environment from `environment.yml`:
+Create and activate the environment:
 
 ```bash
 conda env create -f environment.yml
 conda activate vcomt2d
 ```
 
-If you use `micromamba`:
+Or with `micromamba`:
 
 ```bash
 micromamba create -f environment.yml
 micromamba activate vcomt2d
 ```
 
-Verify the environment:
+### Option B: Python venv
 
 ```bash
-python --version
-python -m pytest -q
-```
-
-### Option B: Python venv Setup
-
-Create and activate a virtual environment:
-
-```bash
-python3 -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Verify the environment:
+### Install ffmpeg
 
-```bash
-python --version
-python -m pytest -q
-```
+`MP4` export requires `ffmpeg` to be available on `PATH`, or provided via `VCOMT2D_FFMPEG_BINARY`.
 
-## Installing ffmpeg
-
-MP4 export requires `ffmpeg` to be available on `PATH`.
-
-### Ubuntu / Debian
+Ubuntu / Debian:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y ffmpeg
 ```
 
-### Conda / Micromamba
-
-If you prefer an environment-local installation:
-
-```bash
-conda install -c conda-forge ffmpeg
-```
-
-or
-
-```bash
-micromamba install -n vcomt2d -c conda-forge ffmpeg
-```
-
-### macOS
+macOS:
 
 ```bash
 brew install ffmpeg
 ```
 
-### Verify ffmpeg
+Conda / Micromamba:
+
+```bash
+conda install -c conda-forge ffmpeg
+```
+
+Verify:
 
 ```bash
 ffmpeg -version
 ```
 
-If this command fails, MP4 export will not work and the project will explicitly fall back to GIF export.
-
-## Installing Project Dependencies
-
-If you are not using `environment.yml`, install the Python dependencies manually:
+If `ffmpeg` is installed in a non-standard location:
 
 ```bash
-pip install -r requirements.txt
+export VCOMT2D_FFMPEG_BINARY=/absolute/path/to/ffmpeg
 ```
 
 ## Running Planning Demos
-
-From the repository root:
 
 ```bash
 python3 scripts/plan_door_demo.py
@@ -383,10 +274,10 @@ python3 scripts/plan_relay_demo.py
 
 Each planning demo prints:
 
-- planner reasoning summary
+- reasoning summary
 - structural validation result
 - semantic validation result
-- final FSM JSON
+- final `FSM` as JSON
 
 ## Running Animation Demos
 
@@ -397,39 +288,40 @@ python3 scripts/animate_search_demo.py
 python3 scripts/animate_relay_demo.py
 ```
 
-Generated outputs are saved under:
+If `ffmpeg` is available, the animation is saved as `MP4` under `outputs/animations/`.
 
-```text
-outputs/animations/
+If `ffmpeg` is not available, the exporter prints a clear message and saves a `GIF` fallback instead.
+
+## Running Evaluation
+
+Run all tasks once:
+
+```bash
+python3 scripts/run_eval.py --runs 1
 ```
 
-## MP4 Export Behavior
+Run only two tasks:
 
-The animation export logic prefers MP4 whenever `ffmpeg` is available.
-
-Behavior:
-
-- if `ffmpeg` is found on `PATH`:
-  - animation demos save `.mp4`
-- if `ffmpeg` is not found:
-  - export raises a clear `AnimationExportError`
-  - the demo wrapper uses the explicit GIF fallback path
-
-Direct API:
-
-```python
-from vcomt2d.viz.export import save_animation_mp4
-
-save_animation_mp4(trace, "outputs/animations/door_demo.mp4", fps=4)
+```bash
+python3 scripts/run_eval.py --tasks door relay --runs 3
 ```
 
-Fallback-friendly API:
+Run the future-backend entrypoint with deterministic fallback:
 
-```python
-from vcomt2d.viz.export import save_animation_with_fallback
+```bash
+python3 scripts/run_eval.py --tasks relay --runs 1 --planner-mode llm_stub
+```
 
-artifact = save_animation_with_fallback(trace, "outputs/animations/door_demo", fps=4)
-print(artifact.saved_path, artifact.format, artifact.message)
+Enable animation artifacts during evaluation:
+
+```bash
+python3 scripts/run_eval.py --tasks search relay --runs 1 --animation
+```
+
+Write artifacts to a custom directory:
+
+```bash
+python3 scripts/run_eval.py --output-dir /tmp/vcomt_eval --runs 1
 ```
 
 ## Running Tests
@@ -440,40 +332,51 @@ Run the full test suite:
 python3 -m pytest -q
 ```
 
-Current test coverage includes:
+Important test groups include:
 
-- intent parsing
-- scene interpretation
-- role assignment
-- planner generation for all supported tasks
-- structural validation
-- structural repair
-- semantic sanity checks
-- regression handling for unsupported or inconsistent inputs
-- animation trace generation
-- MP4 export behavior and fallback handling
+- parser and scene interpretation tests
+- role assignment tests
+- structural validator tests
+- semantic sanity tests
+- repair regression tests
+- planner task tests
+- animation export tests
+- evaluation harness tests
+- backend / future integration tests
+
+## Animation And MP4 Export
+
+Animation export is implemented in `vcomt2d/viz/export.py`.
+
+Behavior:
+
+- `save_animation_mp4(...)` requires `ffmpeg`
+- `save_animation_with_fallback(...)` prefers `MP4`
+- if `ffmpeg` is unavailable and fallback is allowed, it writes `GIF`
+- exported files are returned as structured `ExportArtifact` metadata
+
+This keeps demo and evaluation workflows deterministic and scriptable.
 
 ## Current Limitations
 
-- intent parsing is still rule-based
-- semantic checks are deterministic heuristics, not learned reasoning
-- the executor is a lightweight 2D runtime, not a full robotics simulator
-- no realistic dynamics, sensing, or collision modeling
-- search targets are available through structured world-state fixtures
-- no external LLM/VLM integration yet
+- planner intent parsing is still rule-based
+- the `LLM/VLM` backend is a stub, not a real model integration
+- physics, collision, and perception are intentionally simplified
+- execution semantics are lightweight and designed for pipeline validation, not realism benchmarking
+- only four collaborative task families are currently supported
 
 ## Future Work
 
-- replace deterministic instruction parsing with an LLM/VLM-backed planner frontend
-- extend semantic sanity checks with richer world semantics
-- connect the planner contract to a future 3D simulator
-- add more task templates and richer topology handling
-- strengthen execution-time semantic failure detection
-- add CI-ready environment automation for MP4 verification
+- replace the stub backend with a real `LLM/VLM` planner adapter
+- add richer semantic repair strategies beyond deterministic resynthesis
+- expand the evaluation harness with larger fixture banks and aggregate metrics
+- increase task realism with better topology reasoning and stronger failure semantics
+- connect the planner contract to a 3D simulator or robotics middleware layer
 
-## Additional Documentation
+## Additional Docs
 
 - `docs/architecture.md`
 - `docs/planner.md`
+- `docs/evaluation.md`
 - `docs/tasks.md`
 - `docs/fsm_schema.md`

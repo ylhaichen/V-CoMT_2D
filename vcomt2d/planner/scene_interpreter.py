@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from vcomt2d.sim.entities import WorldState
+from .heuristics import choose_relay_handoff_region
 from .models import SceneFacts, TaskType
 
 
@@ -43,20 +44,28 @@ def interpret_scene(task_type: TaskType, world_state: WorldState) -> SceneFacts:
             raise SceneInterpretationError("insufficient_search_regions")
         if target_region_id is None:
             raise SceneInterpretationError("no_target_region_found")
-        return SceneFacts(task_type=task_type, target_object_id=target_object_id, search_region_ids=search_region_ids, goal_region_id=target_region_id)
+        ordered_search_regions = sorted(dict.fromkeys(search_region_ids))
+        return SceneFacts(task_type=task_type, target_object_id=target_object_id, search_region_ids=ordered_search_regions, goal_region_id=target_region_id)
 
     if task_type == TaskType.T6_RELAY_DELIVERY:
         target_object = _first_object_of_type(world_state, "box")
         target_object_id = world_state.task_facts.get("target_object_id") or (target_object.object_id if target_object is not None else None)
         goal_region_id = world_state.task_facts.get("goal_region_id") or _first_goal_by_label(world_state, "goal_region")
-        handoff_region_id = world_state.task_facts.get("handoff_region_id") or _first_goal_by_label(world_state, "handoff_region")
+        requested_handoff = world_state.task_facts.get("handoff_region_id") or _first_goal_by_label(world_state, "handoff_region")
         if target_object_id is None:
             raise SceneInterpretationError("target_object_not_found")
         if goal_region_id is None:
             raise SceneInterpretationError("no_goal_region_found")
+        handoff_region_id, handoff_rationale, handoff_metrics = choose_relay_handoff_region(world_state, target_object_id, goal_region_id, requested_handoff)
         if handoff_region_id is None:
             raise SceneInterpretationError("no_handoff_region_found")
-        return SceneFacts(task_type=task_type, target_object_id=target_object_id, goal_region_id=goal_region_id, handoff_region_id=handoff_region_id)
+        return SceneFacts(
+            task_type=task_type,
+            target_object_id=target_object_id,
+            goal_region_id=goal_region_id,
+            handoff_region_id=handoff_region_id,
+            topology_notes=[handoff_rationale, f"handoff_metrics={handoff_metrics}"],
+        )
 
     raise SceneInterpretationError(f"unsupported_task_type:{task_type}")
 

@@ -15,7 +15,7 @@ def build_search_plan(instruction: str, reasoning_summary: str, scene_facts, rol
             "S0_SPLIT_SEARCH": action(SkillName.MOVE_TO.value, target_id=assignments[finder]),
             "S1_TRACK_TARGET": action(SkillName.TRACK_OBJECT.value, object_id=scene_facts.target_object_id),
             "S2_SIGNAL_FOUND": action(SkillName.SIGNAL.value, message="target_found"),
-            "S3_CONVERGE": action(SkillName.HOLD_POSITION.value, ticks=1),
+            "S3_CONVERGE": action(SkillName.MOVE_TO.value, target_id=scene_facts.goal_region_id),
         },
         converger: {
             "S0_SPLIT_SEARCH": action(SkillName.MOVE_TO.value, target_id=assignments[converger]),
@@ -65,4 +65,3 @@ def build_search_plan(instruction: str, reasoning_summary: str, scene_facts, rol
         terminal("S_FAIL", "failure"),
     ]
     return plan(task_description=instruction, reasoning_summary=reasoning_summary, initial_state="S0_SPLIT_SEARCH", states=states)
-

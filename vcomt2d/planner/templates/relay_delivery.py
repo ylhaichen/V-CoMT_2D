@@ -9,12 +9,13 @@ from vcomt2d.planner.fsm_builder import action, condition, plan, state, terminal
 def build_relay_plan(instruction: str, reasoning_summary: str, scene_facts, roles, config):
     starter = roles.roles["starter"]
     finisher = roles.roles["finisher"]
+    clearance_position = roles.roles.get("clearance_position", [4.0, 8.0])
     robot_actions = {
         starter: {
             "S0_INIT": action(SkillName.MOVE_TO.value, target_id=scene_facts.target_object_id),
             "S1_FIRST_PUSH": action(SkillName.PUSH.value, object_id=scene_facts.target_object_id, target_id=scene_facts.handoff_region_id),
             "S2_HANDOFF_SYNC": action(SkillName.SIGNAL.value, message="handoff_ready"),
-            "S3_SECOND_PUSH": action(SkillName.RETREAT.value, target_position=[4.0, 8.0]),
+            "S3_SECOND_PUSH": action(SkillName.RETREAT.value, target_position=clearance_position),
         },
         finisher: {
             "S0_INIT": action(SkillName.MOVE_TO.value, target_id=scene_facts.handoff_region_id),
@@ -64,4 +65,3 @@ def build_relay_plan(instruction: str, reasoning_summary: str, scene_facts, role
         terminal("S_FAIL", "failure"),
     ]
     return plan(task_description=instruction, reasoning_summary=reasoning_summary, initial_state="S0_INIT", states=states)
-

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from vcomt2d.core.types import distance_xy, midpoint
+from vcomt2d.core.types import distance_xy
 from vcomt2d.fsm.schema import FSMPlan, StateSpec
-from .models import PlanningRequest, RoleAssignment, SceneFacts, SemanticCheckResult, SemanticIssue, TaskType
+from .backends import PlannerBackend
+from .heuristics import choose_relay_handoff_region, relay_handoff_quality
+from .models import PlanningContext, PlanningRequest, RoleAssignment, SceneFacts, SemanticCheckResult, SemanticIssue, TaskType
 from .role_assignment import assign_roles
 
 
@@ -43,6 +46,7 @@ class SemanticSanityChecker:
 
     def _check_t1_door_wedge_pass_through(self, plan: FSMPlan, world_state, scene_facts: SceneFacts, roles: RoleAssignment) -> SemanticCheckResult:
         errors: List[SemanticIssue] = []
+        warnings: List[SemanticIssue] = []
         state_map = plan.state_map()
         door = world_state.door_map().get(scene_facts.relevant_door_id)
         goal = world_state.goal_map().get(scene_facts.goal_region_id)
@@ -74,16 +78,19 @@ class SemanticSanityChecker:
                 errors.append(SemanticIssue("door_wrong_holder", "Door holder is not the geometrically preferred robot.", repairable=True, suggested_repair="reassign_door_roles"))
             if mover != waiter:
                 errors.append(SemanticIssue("door_pass_order_inconsistent", "The robot that waited for the door is not the one passing through first.", repairable=True, suggested_repair="relink_pass_sequence"))
+            if follow_state.robot_a.skill != "FOLLOW" and follow_state.robot_b.skill != "FOLLOW":
+                warnings.append(SemanticIssue("door_follow_is_static", "Door follow phase is valid but would be more realistic if the holder actively FOLLOWed the passer.", repairable=False))
 
         if not self._has_transition(pass_state, "S3_FOLLOW", kind="robot_in_region", robot=expected_roles["passer"], region_id=scene_facts.goal_region_id):
             errors.append(SemanticIssue("door_pass_condition_invalid", "Door pass-through state must transition when the passer reaches the target side.", repairable=True, suggested_repair="relink_pass_sequence", state_id="S2_PASS_PARTNER"))
         if not self._has_transition(follow_state, "S_DONE", kind="both_in_region", region_id=scene_facts.goal_region_id):
             errors.append(SemanticIssue("door_done_condition_invalid", "Door completion must require both robots reaching the target-side region.", repairable=True, suggested_repair="restore_terminal_condition", state_id="S3_FOLLOW"))
 
-        return self._result(errors, debug_info={"expected_roles": expected_roles, "inferred_holder": holder, "inferred_waiter": waiter})
+        return self._result(errors, warnings=warnings, debug_info={"expected_roles": expected_roles, "inferred_holder": holder, "inferred_waiter": waiter})
 
     def _check_t2_herding_corralling(self, plan: FSMPlan, world_state, scene_facts: SceneFacts, roles: RoleAssignment) -> SemanticCheckResult:
         errors: List[SemanticIssue] = []
+        warnings: List[SemanticIssue] = []
         state_map = plan.state_map()
         target_obj = world_state.object_map().get(scene_facts.target_object_id)
         goal = world_state.goal_map().get(scene_facts.goal_region_id)
@@ -109,7 +116,7 @@ class SemanticSanityChecker:
         elif pusher != expected_roles["pusher"]:
             errors.append(SemanticIssue("herding_wrong_pusher", "Assigned herding pusher is not the geometrically preferred robot.", repairable=True, suggested_repair="reassign_herding_roles"))
 
-        setup_targets = [self._action_target_id(getattr(setup_state, robot_id)) for robot_id in ("robot_a", "robot_b")]
+        setup_targets = [self._action_target_signature(getattr(setup_state, robot_id)) for robot_id in ("robot_a", "robot_b")]
         if None in setup_targets or setup_targets[0] == setup_targets[1]:
             errors.append(SemanticIssue("herding_setup_not_partitioned", "Herding setup should place robots at differentiated staging targets before pushing.", repairable=True, suggested_repair="rebuild_setup_phase"))
 
@@ -127,14 +134,17 @@ class SemanticSanityChecker:
             pusher_alignment = goal_vector[0] * pusher_vector[0] + goal_vector[1] * pusher_vector[1]
             if blocker_alignment <= pusher_alignment:
                 errors.append(SemanticIssue("herding_blocker_wrong_side", "Blocker/funnel robot is not positioned on the target-side constraint role.", repairable=True, suggested_repair="reassign_herding_roles"))
+            elif blocker_alignment - pusher_alignment < 1.0:
+                warnings.append(SemanticIssue("herding_blocker_margin_small", "Blocker position is valid but only weakly constrains the goal-side escape route.", repairable=False))
 
         if not self._has_transition(push_state, "S_DONE", kind="object_in_region", object_id=scene_facts.target_object_id, region_id=scene_facts.goal_region_id):
             errors.append(SemanticIssue("herding_done_condition_invalid", "Herding completion must depend on the object entering the goal region.", repairable=True, suggested_repair="restore_terminal_condition", state_id="S2_PUSH_AND_FUNNEL"))
 
-        return self._result(errors, debug_info={"expected_roles": expected_roles, "inferred_pusher": pusher})
+        return self._result(errors, warnings=warnings, debug_info={"expected_roles": expected_roles, "inferred_pusher": pusher})
 
     def _check_t4_collaborative_search_converge(self, plan: FSMPlan, world_state, scene_facts: SceneFacts, roles: RoleAssignment) -> SemanticCheckResult:
         errors: List[SemanticIssue] = []
+        warnings: List[SemanticIssue] = []
         state_map = plan.state_map()
         target_obj = world_state.object_map().get(scene_facts.target_object_id)
         goal = world_state.goal_map().get(scene_facts.goal_region_id)
@@ -158,19 +168,31 @@ class SemanticSanityChecker:
             errors.append(SemanticIssue("search_same_region", "Both robots are assigned the same initial search region.", repairable=True, suggested_repair="reassign_search_regions", state_id="S0_SPLIT_SEARCH"))
         if any(target_id not in scene_facts.search_region_ids for target_id in split_targets if target_id is not None):
             errors.append(SemanticIssue("search_invalid_region", "Initial search targets must be drawn from the declared search regions.", repairable=True, suggested_repair="reassign_search_regions", state_id="S0_SPLIT_SEARCH"))
+        if len(set(split_targets)) == 2:
+            first = world_state.goal_map()[split_targets[0]].center
+            second = world_state.goal_map()[split_targets[1]].center
+            if distance_xy(first, second) < 2.5:
+                warnings.append(SemanticIssue("search_partition_narrow", "Search sectors are distinct but spatially close, which reduces coverage efficiency.", repairable=False))
 
         finder = self._robot_with_skill(track_state, "TRACK_OBJECT", object_id=scene_facts.target_object_id)
         signaler = self._robot_with_skill(signal_state, "SIGNAL", message="target_found")
         waiter = self._robot_with_skill(signal_state, "WAIT_UNTIL")
-        converger = self._robot_with_skill(converge_state, "MOVE_TO", target_id=scene_facts.goal_region_id)
-        if finder is None or signaler is None or waiter is None or converger is None:
+        converger_action = getattr(converge_state, expected_roles["converger"])
+        finder_action = getattr(converge_state, expected_roles["finder"])
+        converger_valid = (
+            converger_action is not None
+            and converger_action.skill == "MOVE_TO"
+            and converger_action.params.get("target_id") == scene_facts.goal_region_id
+        )
+        finder_valid = finder_action is not None and finder_action.skill in {"MOVE_TO", "HOLD_POSITION", "TRACK_OBJECT"}
+        if finder is None or signaler is None or waiter is None or not converger_valid or not finder_valid:
             errors.append(SemanticIssue("search_coordination_missing", "Search task must include explicit find/report/converge coordination.", repairable=True, suggested_repair="restore_search_coordination"))
         else:
             if finder != expected_roles["finder"]:
                 errors.append(SemanticIssue("search_wrong_finder", "Primary finder is not aligned with the deterministic search heuristic.", repairable=True, suggested_repair="reassign_search_roles"))
             if signaler != finder:
                 errors.append(SemanticIssue("search_reporter_mismatch", "The robot that finds the object should also report the discovery.", repairable=True, suggested_repair="restore_search_coordination"))
-            if waiter != expected_roles["converger"] or converger != expected_roles["converger"]:
+            if waiter != expected_roles["converger"]:
                 errors.append(SemanticIssue("search_converger_mismatch", "Non-finder robot is not the one waiting for the report and converging afterward.", repairable=True, suggested_repair="reassign_search_roles"))
 
         if not self._has_transition(track_state, "S2_SIGNAL_FOUND", kind="object_found", object_id=scene_facts.target_object_id):
@@ -178,10 +200,11 @@ class SemanticSanityChecker:
         if not self._has_transition(converge_state, "S_DONE", kind="both_in_region", region_id=scene_facts.goal_region_id):
             errors.append(SemanticIssue("search_done_condition_invalid", "Search completion must require both robots converging to the target region.", repairable=True, suggested_repair="restore_terminal_condition", state_id="S3_CONVERGE"))
 
-        return self._result(errors, debug_info={"expected_roles": expected_roles, "split_targets": split_targets})
+        return self._result(errors, warnings=warnings, debug_info={"expected_roles": expected_roles, "split_targets": split_targets})
 
     def _check_t6_relay_delivery(self, plan: FSMPlan, world_state, scene_facts: SceneFacts, roles: RoleAssignment) -> SemanticCheckResult:
         errors: List[SemanticIssue] = []
+        warnings: List[SemanticIssue] = []
         state_map = plan.state_map()
         target_obj = world_state.object_map().get(scene_facts.target_object_id)
         goal = world_state.goal_map().get(scene_facts.goal_region_id)
@@ -195,13 +218,13 @@ class SemanticSanityChecker:
         if goal is None:
             errors.append(SemanticIssue("relay_goal_missing", "Relay task requires a goal region.", repairable=False))
         if handoff is None:
-            errors.append(SemanticIssue("relay_handoff_missing", "Relay task requires a handoff region or a sensible inferred equivalent.", repairable=False))
+            errors.append(SemanticIssue("relay_handoff_missing", "Relay task requires a handoff region or a sensible inferred equivalent.", repairable=True, suggested_repair="recompute_handoff_region"))
         if target_obj is not None and goal is not None and handoff is not None:
-            direct = distance_xy(target_obj.pose.xy(), goal.center)
-            via_handoff = distance_xy(target_obj.pose.xy(), handoff.center) + distance_xy(handoff.center, goal.center)
-            mid = midpoint(target_obj.pose.xy(), goal.center)
-            if via_handoff > direct * 1.6 or distance_xy(handoff.center, mid) > direct * 0.55:
-                errors.append(SemanticIssue("relay_handoff_implausible", "Handoff region is not plausibly between source and destination.", repairable=False))
+            quality = relay_handoff_quality(world_state, scene_facts.target_object_id, scene_facts.goal_region_id, scene_facts.handoff_region_id)
+            if quality["detour_ratio"] > 1.6 or quality["midpoint_offset"] > quality["direct_distance"] * 0.55:
+                errors.append(SemanticIssue("relay_handoff_implausible", "Handoff region is not plausibly between source and destination.", repairable=True, suggested_repair="recompute_handoff_region"))
+            elif quality["detour_ratio"] > 1.35:
+                warnings.append(SemanticIssue("relay_handoff_detour_high", "Relay handoff is valid but introduces a noticeable detour.", repairable=False))
 
         first_push = state_map.get("S1_FIRST_PUSH")
         handoff_sync = state_map.get("S2_HANDOFF_SYNC")
@@ -235,7 +258,7 @@ class SemanticSanityChecker:
         if not self._has_transition(second_push, "S_DONE", kind="object_in_region", object_id=scene_facts.target_object_id, region_id=scene_facts.goal_region_id):
             errors.append(SemanticIssue("relay_done_condition_invalid", "Relay completion must depend on the payload reaching the goal region.", repairable=True, suggested_repair="restore_terminal_condition", state_id="S3_SECOND_PUSH"))
 
-        return self._result(errors, debug_info={"expected_roles": expected_roles, "inferred_starter": starter, "inferred_finisher": finisher})
+        return self._result(errors, warnings=warnings, debug_info={"expected_roles": expected_roles, "inferred_starter": starter, "inferred_finisher": finisher})
 
     def _result(self, errors: List[SemanticIssue], warnings: Optional[List[SemanticIssue]] = None, debug_info: Optional[Dict[str, object]] = None) -> SemanticCheckResult:
         warning_list = warnings or []
@@ -265,6 +288,15 @@ class SemanticSanityChecker:
             return None
         return action.params.get("target_id")
 
+    def _action_target_signature(self, action):
+        if action is None:
+            return None
+        if "target_id" in action.params:
+            return ("target_id", action.params["target_id"])
+        if "target_position" in action.params:
+            return ("target_position", tuple(round(value, 3) for value in action.params["target_position"]))
+        return None
+
     def _resolve_target_xy(self, world_state, action) -> Tuple[float, float]:
         if action is None:
             raise KeyError("Missing action")
@@ -286,21 +318,40 @@ class SemanticRepairer:
     def repair(
         self,
         request: PlanningRequest,
+        context: PlanningContext,
         plan: FSMPlan,
         semantic_result: SemanticCheckResult,
-        scene_facts: SceneFacts,
-        roles: RoleAssignment,
-        builder: Callable,
+        rebuild_backend: PlannerBackend,
     ) -> SemanticRepairResult:
         repairable_errors = [issue for issue in semantic_result.errors if issue.repairable]
         if not repairable_errors:
-            return SemanticRepairResult(plan=plan, roles=roles, scene_facts=scene_facts, applied_repairs=[])
+            return SemanticRepairResult(plan=plan, roles=context.roles, scene_facts=context.scene_facts, applied_repairs=[])
 
-        refreshed_roles = assign_roles(scene_facts, request.world_state)
+        repaired_scene_facts = deepcopy(context.scene_facts)
+        applied_repairs = [f"semantic::{repair}" for repair in semantic_result.suggested_repairs] or ["semantic::resynthesize_task_template"]
+
+        issue_codes = {issue.code for issue in repairable_errors}
+        if {"relay_handoff_implausible", "relay_handoff_missing"} & issue_codes:
+            handoff_region_id, _, _ = choose_relay_handoff_region(
+                request.world_state,
+                repaired_scene_facts.target_object_id,
+                repaired_scene_facts.goal_region_id,
+                repaired_scene_facts.handoff_region_id,
+            )
+            if handoff_region_id is not None:
+                repaired_scene_facts.handoff_region_id = handoff_region_id
+
+        refreshed_roles = assign_roles(repaired_scene_facts, request.world_state)
         refreshed_reasoning = (
-            f"{plan.reasoning_summary} Semantic repair re-synthesized the plan using deterministic scene facts and role heuristics. "
+            f"{context.reasoning_summary} Semantic repair re-synthesized the plan using deterministic scene facts and role heuristics. "
             f"Applied repairs={semantic_result.suggested_repairs}."
         )
-        repaired_plan = builder(request.user_instruction, refreshed_reasoning, scene_facts, refreshed_roles, request.planning_config)
-        applied_repairs = [f"semantic::{repair}" for repair in semantic_result.suggested_repairs] or ["semantic::resynthesize_task_template"]
-        return SemanticRepairResult(plan=repaired_plan, roles=refreshed_roles, scene_facts=scene_facts, applied_repairs=applied_repairs)
+        repaired_context = PlanningContext(
+            request=request,
+            intent=context.intent,
+            scene_facts=repaired_scene_facts,
+            roles=refreshed_roles,
+            reasoning_summary=refreshed_reasoning,
+        )
+        repaired_plan = rebuild_backend.build_candidate(repaired_context).plan
+        return SemanticRepairResult(plan=repaired_plan, roles=refreshed_roles, scene_facts=repaired_scene_facts, applied_repairs=applied_repairs)

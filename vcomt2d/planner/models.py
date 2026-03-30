@@ -65,11 +65,35 @@ class SceneFacts:
 @dataclass
 class RoleAssignment:
     task_type: TaskType
-    roles: Dict[str, str]
+    roles: Dict[str, Any]
     rationale: str
 
     def to_dict(self) -> Dict[str, Any]:
         return to_serializable(self)
+
+
+@dataclass
+class PlanningContext:
+    request: PlanningRequest
+    intent: IntentParseResult
+    scene_facts: SceneFacts
+    roles: RoleAssignment
+    reasoning_summary: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return to_serializable(self)
+
+
+@dataclass
+class BackendPlanCandidate:
+    backend_name: str
+    plan: FSMPlan
+    debug_info: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = to_serializable(self)
+        payload["plan"] = self.plan.to_dict()
+        return payload
 
 
 @dataclass

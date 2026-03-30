@@ -4,3 +4,4 @@ __pycache__/
 .codex
 outputs/animations/*.gif
 outputs/animations/*.mp4
+outputs/eval/

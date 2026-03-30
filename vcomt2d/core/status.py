@@ -9,6 +9,8 @@ class PlannerMode(str, Enum):
     DETERMINISTIC = "deterministic"
     SCRIPTED = "scripted"
     REPAIR = "repair"
+    LLM_STUB = "llm_stub"
+    VLM_STUB = "vlm_stub"
 
 
 class ExecutionStatus(str, Enum):
@@ -16,4 +18,3 @@ class ExecutionStatus(str, Enum):
     FAILURE = "failure"
     VALIDATION_FAILED = "validation_failed"
     PLANNING_FAILED = "planning_failed"
-

@@ -2,39 +2,77 @@
 
 ## Modules
 
-- `base.py`: planner interface
-- `models.py`: request / response / reasoning models
-- `intent_parser.py`: keyword-based task-family inference
-- `scene_interpreter.py`: extract task-relevant facts from `WorldState`
-- `role_assignment.py`: deterministic role heuristics
-- `fsm_builder.py`: schema-safe state/action/transition helpers
-- `repair.py`: bounded structural repair
-- `validator_adapter.py`: wraps FSM validator
-- `templates/`: per-task FSM synthesis
-- `main.py`: orchestration entrypoint
+- `base.py`
+  - top-level planner interface
+- `models.py`
+  - request, response, and reasoning models
+- `backends.py`
+  - candidate plan generation backends
+- `pipeline.py`
+  - orchestration for generation, validation, semantic checks, and repair
+- `intent_parser.py`
+  - keyword-based task-family inference
+- `scene_interpreter.py`
+  - extraction of task-relevant facts from `WorldState`
+- `heuristics.py`
+  - reusable geometry-aware heuristics
+- `role_assignment.py`
+  - deterministic role selection
+- `fsm_builder.py`
+  - schema-safe state/action/transition helpers
+- `repair.py`
+  - bounded structural repair
+- `semantic_checks.py`
+  - semantic sanity checks and deterministic resynthesis
+- `templates/`
+  - per-task deterministic `FSM` synthesis
 
-## Validation Flow
+## Pipeline
 
-1. parse intent
-2. interpret scene
-3. assign roles
-4. synthesize task template
-5. validate FSM
-6. apply structural repair if needed
-7. run semantic sanity checks
-8. if semantic issues are repairable, resynthesize deterministically from trusted scene facts / role heuristics
-9. revalidate and return structured `PlanningResult`
+1. parse instruction into a supported task family
+2. interpret the structured 2D scene
+3. assign collaborative roles using deterministic heuristics
+4. build a `PlanningContext`
+5. ask the planner backend for a candidate plan
+6. run structural validation
+7. run structural repair if needed
+8. run semantic sanity checks
+9. run semantic repair / deterministic resynthesis if needed
+10. return `PlanningResult`
+
+## Backends
+
+Current backends:
+
+- `DeterministicTemplateBackend`
+  - trusted symbolic baseline used for normal planning
+- `StubLLMPlannerBackend`
+  - future insertion point for `LLM/VLM` candidate generation
+
+The backend boundary exists so future model-generated candidates can enter the same sanitize / validate / execute stack without changing downstream components.
 
 ## Semantic Sanity Layer
 
-`semantic_checks.py` adds task-aware planner quality checks on top of structural validation.
+`semantic_checks.py` rejects plans that are structurally valid but strategically poor.
 
-Current checks cover:
+Examples:
 
-- `T1`: valid wedgeable door, plausible holder, waiting/pass order, both robots on target side at completion
-- `T2`: movable object, goal region, setup before push, plausible blocker geometry, object-at-goal terminal
-- `T4`: differentiated search sectors, explicit found/report step, converger behavior, rendezvous terminal
-- `T6`: plausible handoff region, starter/finisher plausibility, actual relay structure, object-at-goal terminal
+- `T1`
+  - invalid holder choice
+  - broken wait / pass order
+  - incorrect completion semantics
+- `T2`
+  - missing setup phase
+  - implausible blocker geometry
+  - incorrect object-goal completion condition
+- `T4`
+  - duplicated search sectors
+  - missing report / converge coordination
+  - incorrect rendezvous semantics
+- `T6`
+  - implausible handoff region
+  - non-relay pseudo-strategy
+  - incorrect payload-goal completion condition
 
 Returned result includes:
 
@@ -44,11 +82,24 @@ Returned result includes:
 - `suggested_repairs`
 - `debug_info`
 
-## How To Add A New Task
+## Repair Strategy
+
+Two repair layers exist:
+
+- structural repair
+  - local `FSM` fixes such as timeout coverage, missing terminal states, broken transition targets, and action completion
+- semantic repair
+  - deterministic resynthesis from trusted scene facts, heuristics, and a symbolic backend
+
+This split keeps the system compatible with future `LLM/VLM` backends while preserving a stable execution contract.
+
+## Adding A New Task
 
 1. extend `TaskType`
-2. add keywords in `intent_parser.py`
-3. add `SceneFacts` extraction logic
-4. add deterministic role heuristic
-5. add a template in `planner/templates/`
-6. register the template in `planner/main.py`
+2. add instruction patterns in `intent_parser.py`
+3. add scene-fact extraction in `scene_interpreter.py`
+4. add heuristics in `heuristics.py`
+5. add role logic in `role_assignment.py`
+6. add a template under `planner/templates/`
+7. add semantic checks and repair coverage
+8. add fixtures, demos, tests, and evaluation coverage

@@ -1,6 +1,11 @@
 """Planner subsystem entrypoints."""
 
-from .main import DeterministicPlanner
+from .backends import DeterministicTemplateBackend, StubLLMPlannerBackend
+from .main import DeterministicPlanner, planner_from_mode
 
-__all__ = ["DeterministicPlanner"]
-
+__all__ = [
+    "DeterministicPlanner",
+    "DeterministicTemplateBackend",
+    "StubLLMPlannerBackend",
+    "planner_from_mode",
+]

@@ -14,7 +14,7 @@ def build_door_plan(instruction: str, reasoning_summary: str, scene_facts, roles
             "S0_APPROACH": action(SkillName.MOVE_TO.value, target_id=scene_facts.relevant_door_id),
             "S1_HOLD_DOOR": action(SkillName.HOLD_POSITION.value, ticks=2),
             "S2_PASS_PARTNER": action(SkillName.HOLD_POSITION.value, ticks=2),
-            "S3_FOLLOW": action(SkillName.MOVE_TO.value, target_id=scene_facts.goal_region_id),
+            "S3_FOLLOW": action(SkillName.FOLLOW.value, target_robot=passer),
         },
         passer: {
             "S0_APPROACH": action(SkillName.MOVE_TO.value, target_id=scene_facts.wait_region_id or scene_facts.relevant_door_id),
@@ -65,4 +65,3 @@ def build_door_plan(instruction: str, reasoning_summary: str, scene_facts, roles
         terminal("S_FAIL", "failure"),
     ]
     return plan(task_description=instruction, reasoning_summary=reasoning_summary, initial_state="S0_APPROACH", states=states)
-

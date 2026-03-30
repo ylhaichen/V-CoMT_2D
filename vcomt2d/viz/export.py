@@ -28,8 +28,22 @@ class ExportArtifact:
     message: str
 
 
+def resolve_ffmpeg_binary() -> Optional[str]:
+    explicit = os.environ.get("VCOMT2D_FFMPEG_BINARY")
+    if explicit:
+        explicit_path = Path(explicit).expanduser()
+        if explicit_path.exists():
+            matplotlib.rcParams["animation.ffmpeg_path"] = str(explicit_path)
+            return str(explicit_path)
+    discovered = shutil.which("ffmpeg")
+    if discovered:
+        matplotlib.rcParams["animation.ffmpeg_path"] = discovered
+    return discovered
+
+
 def save_animation_mp4(trace, output_path: str, fps: int = 4) -> str:
-    if shutil.which("ffmpeg") is None:
+    ffmpeg_binary = resolve_ffmpeg_binary()
+    if ffmpeg_binary is None:
         raise AnimationExportError("ffmpeg is not installed. Install ffmpeg to enable MP4 export, or use GIF fallback.")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)

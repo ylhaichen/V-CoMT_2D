@@ -1,5 +1,6 @@
 from vcomt2d.planner.models import TaskType
 from vcomt2d.planner.scene_interpreter import interpret_scene
+from vcomt2d.sim.entities import RegionState
 from vcomt2d.sim.tasks.fixtures import door_task_world, herding_task_world, relay_task_world, search_task_world
 
 
@@ -29,3 +30,11 @@ def test_scene_interpreter_relay():
     assert facts.handoff_region_id == "handoff_mid"
     assert facts.goal_region_id == "far_goal"
 
+
+def test_scene_interpreter_relay_prefers_plausible_handoff_region():
+    world = relay_task_world()
+    world.task_facts.pop("handoff_region_id", None)
+    world.goals.append(RegionState("bad_handoff", (1.0, 1.0), 0.8, "handoff_region"))
+
+    facts = interpret_scene(TaskType.T6_RELAY_DELIVERY, world)
+    assert facts.handoff_region_id == "handoff_mid"

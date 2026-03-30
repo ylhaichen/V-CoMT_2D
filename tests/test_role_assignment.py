@@ -1,7 +1,7 @@
 from vcomt2d.planner.models import TaskType
 from vcomt2d.planner.role_assignment import assign_roles
 from vcomt2d.planner.scene_interpreter import interpret_scene
-from vcomt2d.sim.tasks.fixtures import door_task_world, relay_task_world, search_task_world
+from vcomt2d.sim.tasks.fixtures import door_task_world, herding_task_world, relay_task_world, search_task_world
 
 
 def test_role_assignment_door_is_deterministic():
@@ -28,3 +28,13 @@ def test_role_assignment_search_assigns_disjoint_regions():
     assert set(assignments.keys()) == {"robot_a", "robot_b"}
     assert len(set(assignments.values())) == 2
 
+
+def test_role_assignment_herding_includes_geometry_targets():
+    world = herding_task_world()
+    facts = interpret_scene(TaskType.T2_HERDING_CORRALLING, world)
+    roles = assign_roles(facts, world)
+    assert roles.roles["pusher"] in {"robot_a", "robot_b"}
+    assert roles.roles["blocker"] in {"robot_a", "robot_b"}
+    assert roles.roles["pusher"] != roles.roles["blocker"]
+    assert set(roles.roles["setup_targets"].keys()) == {"robot_a", "robot_b"}
+    assert len(roles.roles["funnel_target"]) == 2

@@ -1,14 +1,14 @@
 from copy import deepcopy
 
 from vcomt2d.fsm.validator import validate_fsm
+from vcomt2d.planner.backends import DeterministicTemplateBackend
+from vcomt2d.planner.intent_parser import parse_intent
 from vcomt2d.planner.main import DeterministicPlanner
-from vcomt2d.planner.models import PlanningRequest, TaskType
+from vcomt2d.planner.models import PlanningContext, PlanningRequest, TaskType
 from vcomt2d.planner.role_assignment import assign_roles
 from vcomt2d.planner.scene_interpreter import interpret_scene
 from vcomt2d.planner.semantic_checks import SemanticRepairer, SemanticSanityChecker
 from vcomt2d.planner.templates.door_wedge import build_door_plan
-from vcomt2d.planner.templates.relay_delivery import build_relay_plan
-from vcomt2d.planner.templates.search_converge import build_search_plan
 from vcomt2d.sim.tasks.fixtures import door_task_world, herding_task_world, relay_task_world, search_task_world
 
 
@@ -73,7 +73,20 @@ def test_repairable_search_semantic_issue_gets_corrected():
     assert semantic.passed is False
     assert any(issue.code == "search_same_region" for issue in semantic.errors)
 
-    repaired = repairer.repair(request, plan, semantic, scene_facts, roles, build_search_plan)
+    context = PlanningContext(
+        request=request,
+        intent=parse_intent(request.user_instruction),
+        scene_facts=scene_facts,
+        roles=roles,
+        reasoning_summary=plan.reasoning_summary,
+    )
+    repaired = repairer.repair(
+        request,
+        context,
+        plan,
+        semantic,
+        DeterministicTemplateBackend(),
+    )
     repaired_semantic = checker.check(task_type, repaired.plan, world, scene_facts, repaired.roles)
     assert repaired.applied_repairs
     assert validate_fsm(repaired.plan).valid is True
@@ -110,7 +123,7 @@ def test_herding_plan_with_bad_blocker_side_fails():
     plan = _build_valid_plan(task_type, "Push the ball into the corner", world)
 
     setup_state = plan.state_map()["S0_FLANK_SETUP"]
-    setup_state.robot_b.params["target_id"] = setup_state.robot_a.params["target_id"]
+    setup_state.robot_b.params["target_position"] = list(setup_state.robot_a.params["target_position"])
 
     semantic = checker.check(task_type, plan, world, scene_facts, roles)
     codes = {issue.code for issue in semantic.errors}
